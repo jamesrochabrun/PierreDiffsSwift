@@ -2,6 +2,14 @@
 
 A Swift package for rendering beautiful, syntax-highlighted code diffs in macOS applications using the [@pierre/diffs](https://www.npmjs.com/package/@pierre/diffs) JavaScript library.
 
+## Dark Mode
+<img width="859" height="990" alt="Image" src="https://github.com/user-attachments/assets/4eb8df72-308b-4f99-9bc9-acdb347a11e6" />
+<img width="840" height="632" alt="Image" src="https://github.com/user-attachments/assets/5701be1a-55ee-4c53-9d81-1cfdb38c22fa" />
+
+## Light Mode
+<img width="852" height="984" alt="Image" src="https://github.com/user-attachments/assets/9c6a62c5-8ff5-465d-84b1-a025a9272bc1" />
+<img width="832" height="612" alt="Image" src="https://github.com/user-attachments/assets/0ae99c27-8aba-4523-a7e9-031a8cf9b940" />
+
 ## Features
 
 - Rich syntax highlighting via Shiki (supports 40+ languages)
