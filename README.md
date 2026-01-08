@@ -2,6 +2,8 @@
 
 A Swift package for rendering beautiful, syntax-highlighted code diffs in macOS applications using the [@pierre/diffs](https://www.npmjs.com/package/@pierre/diffs) JavaScript library.
 
+This is how we use it in [Claw](https://github.com/jamesrochabrun/Claw)
+
 ## Dark Mode
 <img width="859" height="990" alt="Image" src="https://github.com/user-attachments/assets/4eb8df72-308b-4f99-9bc9-acdb347a11e6" />
 <img width="840" height="632" alt="Image" src="https://github.com/user-attachments/assets/5701be1a-55ee-4c53-9d81-1cfdb38c22fa" />
