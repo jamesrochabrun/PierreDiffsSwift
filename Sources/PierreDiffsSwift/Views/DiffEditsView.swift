@@ -169,6 +169,7 @@ private struct PierreDiffContentView: View {
   let state: DiffState
   @Binding var diffStyle: DiffStyle
   @State private var overflowMode: OverflowMode = .wrap
+  @State private var webViewOpacity: Double = 1.0
   let filePath: String?
   let onExpandRequest: (() -> Void)?
   let diffLifecycleState: DiffLifecycleState?
@@ -203,6 +204,7 @@ private struct PierreDiffContentView: View {
           onExpandRequest: onExpandRequest
         )
         .frame(minHeight: 500)
+        .opacity(webViewOpacity)
       }
     }
   }
@@ -223,7 +225,7 @@ private struct PierreDiffContentView: View {
         HStack(spacing: 8) {
           // Split/Unified toggle button
           Button {
-            diffStyle = diffStyle == .split ? .unified : .split
+            toggleDiffStyle()
           } label: {
             Image(systemName: diffStyle == .split ? "rectangle.split.2x1" : "rectangle.stack")
               .font(.system(size: 14))
@@ -233,9 +235,9 @@ private struct PierreDiffContentView: View {
 
           // Wrap toggle button
           Button {
-            overflowMode = overflowMode == .scroll ? .wrap : .scroll
+            toggleOverflowMode()
           } label: {
-            Image(systemName: "text.alignleft")
+            Image(systemName: overflowMode == .wrap ? "text.alignleft" : "text.aligncenter")
               .font(.system(size: 14))
               .foregroundStyle(overflowMode == .wrap ? .primary : .secondary)
           }
@@ -261,6 +263,34 @@ private struct PierreDiffContentView: View {
     }
     .padding(.horizontal)
     .padding(.vertical, 12)
+  }
+
+  // MARK: - Toggle Functions
+
+  private func toggleDiffStyle() {
+    Task {
+      withAnimation(.easeOut(duration: 0.15)) {
+        webViewOpacity = 0
+      }
+      try? await Task.sleep(for: .milliseconds(150))
+      diffStyle = diffStyle == .split ? .unified : .split
+      withAnimation(.easeIn(duration: 0.15)) {
+        webViewOpacity = 1
+      }
+    }
+  }
+
+  private func toggleOverflowMode() {
+    Task {
+      withAnimation(.easeOut(duration: 0.15)) {
+        webViewOpacity = 0
+      }
+      try? await Task.sleep(for: .milliseconds(150))
+      overflowMode = overflowMode == .scroll ? .wrap : .scroll
+      withAnimation(.easeIn(duration: 0.15)) {
+        webViewOpacity = 1
+      }
+    }
   }
 }
 
