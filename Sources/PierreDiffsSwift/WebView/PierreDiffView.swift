@@ -41,6 +41,9 @@ public struct PierreDiffView: NSViewRepresentable {
   /// Callback when the view requests expansion to full screen
   var onExpandRequest: (() -> Void)?
 
+  /// Callback when the WebView is ready to display content
+  var onReady: (() -> Void)?
+
   // MARK: - Environment
 
   @Environment(\.colorScheme) private var colorScheme
@@ -54,7 +57,8 @@ public struct PierreDiffView: NSViewRepresentable {
     diffStyle: Binding<DiffStyle>,
     overflowMode: Binding<OverflowMode>,
     onLineClick: ((Int, String) -> Void)? = nil,
-    onExpandRequest: (() -> Void)? = nil
+    onExpandRequest: (() -> Void)? = nil,
+    onReady: (() -> Void)? = nil
   ) {
     self.oldContent = oldContent
     self.newContent = newContent
@@ -63,6 +67,7 @@ public struct PierreDiffView: NSViewRepresentable {
     self._overflowMode = overflowMode
     self.onLineClick = onLineClick
     self.onExpandRequest = onExpandRequest
+    self.onReady = onReady
   }
 
   // MARK: - NSViewRepresentable
@@ -141,7 +146,8 @@ public struct PierreDiffView: NSViewRepresentable {
   public func makeCoordinator() -> DiffWebViewCoordinator {
     DiffWebViewCoordinator(
       onLineClick: onLineClick,
-      onExpandRequest: onExpandRequest
+      onExpandRequest: onExpandRequest,
+      onReady: onReady
     )
   }
 

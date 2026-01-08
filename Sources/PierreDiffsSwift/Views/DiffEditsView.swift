@@ -170,6 +170,7 @@ private struct PierreDiffContentView: View {
   @Binding var diffStyle: DiffStyle
   @State private var overflowMode: OverflowMode = .wrap
   @State private var webViewOpacity: Double = 1.0
+  @State private var isWebViewReady = false
   let filePath: String?
   let onExpandRequest: (() -> Void)?
   let diffLifecycleState: DiffLifecycleState?
@@ -192,19 +193,33 @@ private struct PierreDiffContentView: View {
         .padding()
       } else {
         // Render diff using WebView
-        PierreDiffView(
-          oldContent: state.diffResult.original,
-          newContent: state.diffResult.updated,
-          fileName: state.diffResult.fileName,
-          diffStyle: $diffStyle,
-          overflowMode: $overflowMode,
-          onLineClick: { lineNumber, side in
-            DiffLogger.info("Line clicked: \(lineNumber) on \(side)")
-          },
-          onExpandRequest: onExpandRequest
-        )
-        .frame(minHeight: 500)
-        .opacity(webViewOpacity)
+        ZStack {
+          PierreDiffView(
+            oldContent: state.diffResult.original,
+            newContent: state.diffResult.updated,
+            fileName: state.diffResult.fileName,
+            diffStyle: $diffStyle,
+            overflowMode: $overflowMode,
+            onLineClick: { lineNumber, side in
+              DiffLogger.info("Line clicked: \(lineNumber) on \(side)")
+            },
+            onExpandRequest: onExpandRequest,
+            onReady: {
+              withAnimation(.easeInOut(duration: 0.3)) {
+                isWebViewReady = true
+              }
+            }
+          )
+          .frame(minHeight: 500)
+          .opacity(isWebViewReady ? webViewOpacity : 0)
+
+          if !isWebViewReady {
+            CodeSkeletonLoadingView()
+              .padding(.horizontal)
+              .transition(.opacity)
+          }
+        }
+        .animation(.easeInOut(duration: 0.3), value: isWebViewReady)
       }
     }
   }

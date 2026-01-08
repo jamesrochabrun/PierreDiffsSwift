@@ -23,6 +23,9 @@ public final class DiffWebViewCoordinator: NSObject {
   /// Callback when expand is requested
   var onExpandRequest: (() -> Void)?
 
+  /// Callback when the WebView is ready to display content
+  var onReady: (() -> Void)?
+
   /// Whether the web view has finished loading and is ready
   private(set) var isReady = false
 
@@ -42,10 +45,12 @@ public final class DiffWebViewCoordinator: NSObject {
 
   init(
     onLineClick: ((Int, String) -> Void)? = nil,
-    onExpandRequest: (() -> Void)? = nil
+    onExpandRequest: (() -> Void)? = nil,
+    onReady: (() -> Void)? = nil
   ) {
     self.onLineClick = onLineClick
     self.onExpandRequest = onExpandRequest
+    self.onReady = onReady
     super.init()
   }
 
@@ -181,6 +186,7 @@ public final class DiffWebViewCoordinator: NSObject {
     case .bridgeReady, .ready:
       isReady = true
       executePendingOperations()
+      onReady?()
 
     case .lineClicked(let lineNumber, let side):
       onLineClick?(lineNumber, side)
