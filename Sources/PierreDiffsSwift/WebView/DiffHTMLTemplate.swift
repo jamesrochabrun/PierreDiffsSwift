@@ -39,11 +39,22 @@ enum DiffHTMLTemplate {
   /// Loads the bundled JavaScript from the app resources.
   private static func loadBundledJavaScript() -> String {
     // Try to load from bundle resources
-    guard let bundleURL = Bundle.module.url(
+    // First try with subdirectory (for .copy with directory structure)
+    var bundleURL = Bundle.module.url(
       forResource: "pierre-diffs-bundle",
       withExtension: "js",
       subdirectory: "Resources"
-    ) else {
+    )
+
+    // If not found, try without subdirectory (for flattened resources)
+    if bundleURL == nil {
+      bundleURL = Bundle.module.url(
+        forResource: "pierre-diffs-bundle",
+        withExtension: "js"
+      )
+    }
+
+    guard let bundleURL else {
       DiffLogger.error("DiffHTMLTemplate: Could not find pierre-diffs-bundle.js in bundle")
       return fallbackJavaScript
     }
