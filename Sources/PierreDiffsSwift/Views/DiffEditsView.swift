@@ -270,11 +270,6 @@ private struct PierreDiffContentView: View {
           }
         }
       }
-      if let filePath {
-        Text(filePath)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
     }
     .padding(.horizontal)
     .padding(.vertical, 12)
