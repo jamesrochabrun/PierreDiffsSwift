@@ -51,14 +51,11 @@ public struct DiffEditsView: View {
   @State private var diffStyle: DiffStyle = .unified
   @State private var localDiffStore: DiffStateManager?
 
-  /// Get the active diff store - prefer shared, create local only if necessary
+  /// Get the active diff store - prefer shared, use local
+  /// Note: localDiffStore is always initialized in init when diffStore is nil
   private var activeDiffStore: DiffStateManager {
     if let shared = diffStore {
       return shared
-    }
-    // Create local store if needed
-    if localDiffStore == nil {
-      localDiffStore = DiffStateManager()
     }
     return localDiffStore!
   }
@@ -87,6 +84,11 @@ public struct DiffEditsView: View {
     self.directOldContent = nil
     self.directNewContent = nil
     self.directFileName = nil
+
+    // Initialize local store upfront if no shared store provided
+    if diffStore == nil {
+      self._localDiffStore = State(initialValue: DiffStateManager())
+    }
   }
 
   /// Convenience initializer for direct content comparison (no tool processing)
@@ -117,6 +119,9 @@ public struct DiffEditsView: View {
     self.directOldContent = oldContent
     self.directNewContent = newContent
     self.directFileName = fileName
+
+    // Pre-initialize local diff store for direct content mode
+    self._localDiffStore = State(initialValue: DiffStateManager())
   }
 
   // MARK: - Body
