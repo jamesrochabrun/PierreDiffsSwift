@@ -40,6 +40,12 @@ public struct DiffEditsView: View {
   /// Diff lifecycle state for showing compact views for applied/rejected diffs
   let diffLifecycleState: DiffLifecycleState?
 
+  // MARK: - Direct Content Mode (bypasses tool processing)
+
+  private let directOldContent: String?
+  private let directNewContent: String?
+  private let directFileName: String?
+
   @State private var isProcessing = false
   @State private var processingError: String?
   @State private var diffStyle: DiffStyle = .unified
@@ -59,6 +65,7 @@ public struct DiffEditsView: View {
 
   // MARK: - Initialization
 
+  /// Full initializer for tool-based diff processing (edit, multiEdit, write tools)
   public init(
     messageID: UUID,
     editTool: EditTool,
@@ -75,9 +82,49 @@ public struct DiffEditsView: View {
     self.onExpandRequest = onExpandRequest
     self.diffStore = diffStore
     self.diffLifecycleState = diffLifecycleState
+
+    // Not using direct content mode
+    self.directOldContent = nil
+    self.directNewContent = nil
+    self.directFileName = nil
+  }
+
+  /// Convenience initializer for direct content comparison (no tool processing)
+  ///
+  /// Use this initializer when you already have the old and new content strings
+  /// and don't need to process tool responses.
+  ///
+  /// - Parameters:
+  ///   - oldContent: The original content (before changes)
+  ///   - newContent: The updated content (after changes)
+  ///   - fileName: The name of the file being diffed (used for syntax highlighting)
+  ///   - onExpandRequest: Optional callback when user wants to expand to full-screen
+  public init(
+    oldContent: String,
+    newContent: String,
+    fileName: String,
+    onExpandRequest: (() -> Void)? = nil
+  ) {
+    self.messageID = UUID()
+    self.editTool = .edit  // Unused in direct mode
+    self.toolParameters = [:]
+    self.projectPath = nil
+    self.onExpandRequest = onExpandRequest
+    self.diffStore = nil
+    self.diffLifecycleState = nil
+
+    // Store direct content for processing in onAppear
+    self.directOldContent = oldContent
+    self.directNewContent = newContent
+    self.directFileName = fileName
   }
 
   // MARK: - Body
+
+  /// Computed property for file path - uses direct fileName or tool parameters
+  private var effectiveFilePath: String? {
+    directFileName ?? toolParameters[ParameterKeys.filePath]
+  }
 
   public var body: some View {
     Group {
@@ -95,7 +142,7 @@ public struct DiffEditsView: View {
           PierreDiffContentView(
             state: state,
             diffStyle: $diffStyle,
-            filePath: toolParameters[ParameterKeys.filePath],
+            filePath: effectiveFilePath,
             onExpandRequest: onExpandRequest,
             diffLifecycleState: diffLifecycleState
           )
@@ -112,7 +159,22 @@ public struct DiffEditsView: View {
       let currentState = activeDiffStore.getState(for: messageID)
       let isEmpty = currentState == .empty
 
-      // Only process if we don't have a shared store or if the state is empty
+      // Direct content mode - bypass tool processing
+      if let oldContent = directOldContent,
+         let newContent = directNewContent,
+         let fileName = directFileName,
+         isEmpty {
+        Task {
+          await processDirectContent(
+            oldContent: oldContent,
+            newContent: newContent,
+            fileName: fileName
+          )
+        }
+        return
+      }
+
+      // Tool processing mode (existing logic)
       if diffStore == nil || isEmpty {
         Task {
           await processTool()
@@ -340,6 +402,29 @@ extension DiffEditsView {
     } else if processingError == nil {
       processingError = "Failed to process tool response"
     }
+  }
+
+  /// Processes direct content without tool response parsing.
+  ///
+  /// This method is used when the view is initialized with the convenience initializer
+  /// that accepts oldContent/newContent directly.
+  private func processDirectContent(
+    oldContent: String,
+    newContent: String,
+    fileName: String
+  ) async {
+    isProcessing = true
+    defer { isProcessing = false }
+
+    let diffResult = DiffResult(
+      filePath: fileName,
+      fileName: URL(fileURLWithPath: fileName).lastPathComponent,
+      original: oldContent,
+      updated: newContent,
+      isInitial: false
+    )
+
+    await activeDiffStore.process(diffs: [diffResult], for: messageID)
   }
 
   /// Processes an Edit tool response to generate diff results.
