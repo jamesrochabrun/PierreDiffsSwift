@@ -11,13 +11,7 @@ import SwiftUI
 public struct DiffModalView: View {
   // MARK: - Properties
 
-  let messageID: UUID
-  let editTool: EditTool
-  let toolParameters: [String: String]
-  let projectPath: String?
-  let diffStore: DiffStateManager? // Shared from parent, never creates its own
-  let diffLifecycleState: DiffLifecycleState?
-
+  let input: DiffInput
   let onDismiss: () -> Void
 
   @Environment(\.colorScheme) private var colorScheme
@@ -25,20 +19,10 @@ public struct DiffModalView: View {
   // MARK: - Initialization
 
   public init(
-    messageID: UUID,
-    editTool: EditTool,
-    toolParameters: [String: String],
-    projectPath: String? = nil,
-    diffStore: DiffStateManager? = nil,
-    diffLifecycleState: DiffLifecycleState? = nil,
+    input: DiffInput,
     onDismiss: @escaping () -> Void
   ) {
-    self.messageID = messageID
-    self.editTool = editTool
-    self.toolParameters = toolParameters
-    self.projectPath = projectPath
-    self.diffStore = diffStore
-    self.diffLifecycleState = diffLifecycleState
+    self.input = input
     self.onDismiss = onDismiss
   }
 
@@ -61,15 +45,8 @@ public struct DiffModalView: View {
       Divider()
 
       // Diff content
-      DiffEditsView(
-        messageID: messageID,
-        editTool: editTool,
-        toolParameters: toolParameters,
-        projectPath: projectPath,
-        diffStore: diffStore,
-        diffLifecycleState: diffLifecycleState
-      )
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      DiffEditsView(input: input)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(minWidth: 800, minHeight: 600)
   }

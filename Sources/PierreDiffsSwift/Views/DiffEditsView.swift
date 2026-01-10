@@ -26,99 +26,103 @@ public struct DiffEditsView: View {
 
   // MARK: - Properties
 
-  let messageID: UUID
-  let editTool: EditTool
-  let toolParameters: [String: String]
-  let projectPath: String?
-
-  /// Optional callback for when user wants to expand to full-screen
+  let input: DiffInput
   var onExpandRequest: (() -> Void)?
-
-  /// Shared diff store from parent - required to avoid duplicate processing
-  let diffStore: DiffStateManager?
-
-  /// Diff lifecycle state for showing compact views for applied/rejected diffs
-  let diffLifecycleState: DiffLifecycleState?
 
   @State private var isProcessing = false
   @State private var processingError: String?
   @State private var diffStyle: DiffStyle = .unified
-  @State private var localDiffStore: DiffStateManager?
-
-  /// Get the active diff store - prefer shared, create local only if necessary
-  private var activeDiffStore: DiffStateManager {
-    if let shared = diffStore {
-      return shared
-    }
-    // Create local store if needed
-    if localDiffStore == nil {
-      localDiffStore = DiffStateManager()
-    }
-    return localDiffStore!
-  }
+  @State private var localDiffStore = DiffStateManager()
 
   // MARK: - Initialization
 
   public init(
-    messageID: UUID,
-    editTool: EditTool,
-    toolParameters: [String: String],
-    projectPath: String? = nil,
-    onExpandRequest: (() -> Void)? = nil,
-    diffStore: DiffStateManager? = nil,
-    diffLifecycleState: DiffLifecycleState? = nil
+    input: DiffInput,
+    onExpandRequest: (() -> Void)? = nil
   ) {
-    self.messageID = messageID
-    self.editTool = editTool
-    self.toolParameters = toolParameters
-    self.projectPath = projectPath
+    self.input = input
     self.onExpandRequest = onExpandRequest
-    self.diffStore = diffStore
-    self.diffLifecycleState = diffLifecycleState
   }
 
   // MARK: - Body
 
   public var body: some View {
     Group {
-      if isProcessing {
-        LoadingView()
-          .transition(.opacity)
-      } else if let error = processingError {
-        ErrorView(error: error)
-          .transition(.opacity)
-      } else {
-        let state = activeDiffStore.getState(for: messageID)
-        if state == .empty {
-          EmptyStateView()
-        } else {
-          PierreDiffContentView(
-            state: state,
-            diffStyle: $diffStyle,
-            filePath: toolParameters[ParameterKeys.filePath],
-            onExpandRequest: onExpandRequest,
-            diffLifecycleState: diffLifecycleState
-          )
-          .transition(.asymmetric(
-            insertion: .opacity.combined(with: .move(edge: .top)),
-            removal: .opacity
-          ))
-        }
+      switch input {
+      case .tool:
+        toolModeView
+      case .direct(let oldContent, let newContent, let fileName):
+        directModeView(oldContent: oldContent, newContent: newContent, fileName: fileName)
       }
     }
-    .animation(.easeInOut(duration: 0.25), value: isProcessing)
-    .animation(.easeInOut(duration: 0.25), value: processingError)
-    .onAppear {
-      let currentState = activeDiffStore.getState(for: messageID)
-      let isEmpty = currentState == .empty
+  }
 
-      // Only process if we don't have a shared store or if the state is empty
-      if diffStore == nil || isEmpty {
-        Task {
-          await processTool()
+  // MARK: - Tool Mode (existing behavior)
+
+  @ViewBuilder
+  private var toolModeView: some View {
+    if case .tool(let messageID, _, let toolParameters, _, let diffStore, let diffLifecycleState) = input {
+      let activeDiffStore = diffStore ?? localDiffStore
+
+      Group {
+        if isProcessing {
+          LoadingView()
+            .transition(.opacity)
+        } else if let error = processingError {
+          ErrorView(error: error)
+            .transition(.opacity)
+        } else {
+          let state = activeDiffStore.getState(for: messageID)
+          if state == .empty {
+            EmptyStateView()
+          } else {
+            PierreDiffContentView(
+              state: state,
+              diffStyle: $diffStyle,
+              filePath: toolParameters[ParameterKeys.filePath],
+              onExpandRequest: onExpandRequest,
+              diffLifecycleState: diffLifecycleState
+            )
+            .transition(.asymmetric(
+              insertion: .opacity.combined(with: .move(edge: .top)),
+              removal: .opacity
+            ))
+          }
+        }
+      }
+      .animation(.easeInOut(duration: 0.25), value: isProcessing)
+      .animation(.easeInOut(duration: 0.25), value: processingError)
+      .onAppear {
+        let currentState = activeDiffStore.getState(for: messageID)
+        if diffStore == nil || currentState == .empty {
+          Task {
+            await processTool()
+          }
         }
       }
     }
+  }
+
+  // MARK: - Direct Mode (bypasses DiffStateManager)
+
+  @ViewBuilder
+  private func directModeView(oldContent: String, newContent: String, fileName: String) -> some View {
+    let diffResult = DiffResult(
+      filePath: fileName,
+      fileName: URL(fileURLWithPath: fileName).lastPathComponent,
+      original: oldContent,
+      updated: newContent,
+      isInitial: false
+    )
+    let state = DiffState(diffResult: diffResult)
+
+    PierreDiffContentView(
+      state: state,
+      diffStyle: $diffStyle,
+      filePath: fileName,
+      onExpandRequest: onExpandRequest,
+      diffLifecycleState: nil
+    )
   }
 }
 
@@ -313,6 +317,11 @@ extension DiffEditsView {
   /// This method coordinates the processing of different tool types, creating diff results
   /// and updating the diff store with the processed changes.
   private func processTool() async {
+    // Only process in tool mode
+    guard case .tool(let messageID, let editTool, let toolParameters, let projectPath, let diffStore, _) = input else {
+      return
+    }
+
     isProcessing = true
     defer {
       isProcessing = false
@@ -326,14 +335,16 @@ extension DiffEditsView {
 
     switch editTool {
     case .edit:
-      diffResults = await processEditTool(processor: processor)
+      diffResults = await processEditTool(processor: processor, toolParameters: toolParameters)
 
     case .multiEdit:
-      diffResults = await processMultiEditTool(processor: processor)
+      diffResults = await processMultiEditTool(processor: processor, toolParameters: toolParameters)
 
     case .write:
-      diffResults = await processWriteTool(processor: processor)
+      diffResults = await processWriteTool(processor: processor, toolParameters: toolParameters)
     }
+
+    let activeDiffStore = diffStore ?? localDiffStore
 
     if let diffResults {
       await activeDiffStore.process(diffs: diffResults, for: messageID)
@@ -343,7 +354,7 @@ extension DiffEditsView {
   }
 
   /// Processes an Edit tool response to generate diff results.
-  private func processEditTool(processor: DiffResultProcessor) async -> [DiffResult]? {
+  private func processEditTool(processor: DiffResultProcessor, toolParameters: [String: String]) async -> [DiffResult]? {
     guard
       let filePath = toolParameters[ParameterKeys.filePath],
       let oldString = toolParameters[ParameterKeys.oldString],
@@ -376,7 +387,7 @@ extension DiffEditsView {
   }
 
   /// Processes a MultiEdit tool response to generate diff results.
-  private func processMultiEditTool(processor: DiffResultProcessor) async -> [DiffResult]? {
+  private func processMultiEditTool(processor: DiffResultProcessor, toolParameters: [String: String]) async -> [DiffResult]? {
     guard
       let filePath = toolParameters[ParameterKeys.filePath],
       let editsString = toolParameters[ParameterKeys.edits],
@@ -417,7 +428,7 @@ extension DiffEditsView {
   }
 
   /// Processes a Write tool response to generate diff results.
-  private func processWriteTool(processor: DiffResultProcessor) async -> [DiffResult]? {
+  private func processWriteTool(processor: DiffResultProcessor, toolParameters: [String: String]) async -> [DiffResult]? {
     guard
       let filePath = toolParameters[ParameterKeys.filePath],
       let content = toolParameters[ParameterKeys.content]
