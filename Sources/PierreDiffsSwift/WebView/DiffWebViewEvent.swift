@@ -15,8 +15,8 @@ enum DiffWebViewEvent {
   /// The diff has been rendered and is ready for interaction
   case ready
 
-  /// A line was clicked
-  case lineClicked(lineNumber: Int, side: String)
+  /// A line was clicked (includes position for UI overlay positioning)
+  case lineClicked(lineNumber: Int, side: String, lineY: CGFloat, lineHeight: CGFloat)
 
   /// Text selection changed
   case selectionChanged(startLine: Int, endLine: Int, side: String)

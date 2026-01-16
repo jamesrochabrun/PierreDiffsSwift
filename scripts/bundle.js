@@ -2,7 +2,7 @@ import * as esbuild from 'esbuild';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 
-const outfile = '../Sources/ClaudeCodeCore/DiffSystem/WebView/Resources/pierre-diffs-bundle.js';
+const outfile = '../Sources/PierreDiffsSwift/Resources/pierre-diffs-bundle.js';
 
 // Ensure output directory exists
 const outDir = dirname(outfile);

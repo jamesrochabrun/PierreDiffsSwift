@@ -20,6 +20,9 @@ public final class DiffWebViewCoordinator: NSObject {
   /// Callback when a line is clicked
   var onLineClick: ((Int, String) -> Void)?
 
+  /// Callback when a line is clicked, with position data for UI overlay positioning
+  var onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)?
+
   /// Callback when expand is requested
   var onExpandRequest: (() -> Void)?
 
@@ -45,13 +48,29 @@ public final class DiffWebViewCoordinator: NSObject {
 
   init(
     onLineClick: ((Int, String) -> Void)? = nil,
+    onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)? = nil,
     onExpandRequest: (() -> Void)? = nil,
     onReady: (() -> Void)? = nil
   ) {
     self.onLineClick = onLineClick
+    self.onLineClickWithPosition = onLineClickWithPosition
     self.onExpandRequest = onExpandRequest
     self.onReady = onReady
     super.init()
+  }
+
+  // MARK: - Coordinate Conversion
+
+  /// Converts a Y position from WebView coordinates to window coordinates
+  func convertToWindowCoordinates(webViewY: CGFloat) -> CGPoint? {
+    guard let webView = webView,
+          webView.window != nil else { return nil }
+
+    // Convert from WebView local coordinates to window coordinates
+    let pointInWebView = CGPoint(x: webView.bounds.midX, y: webViewY)
+    let pointInWindow = webView.convert(pointInWebView, to: nil)
+
+    return pointInWindow
   }
 
   // MARK: - Public Methods
@@ -188,8 +207,40 @@ public final class DiffWebViewCoordinator: NSObject {
       executePendingOperations()
       onReady?()
 
-    case .lineClicked(let lineNumber, let side):
+    case .lineClicked(let lineNumber, let side, _, _):
+      // Always call the simple callback
       onLineClick?(lineNumber, side)
+
+      // Also call the position callback if set, using NSEvent.mouseLocation for reliable positioning
+      if let onLineClickWithPosition = onLineClickWithPosition {
+        // Use macOS mouse location - more reliable than JavaScript coordinates
+        let screenPoint = NSEvent.mouseLocation
+
+        // Convert screen coordinates to WebView local coordinates
+        if let webView = webView, let window = webView.window {
+          // Get WebView's frame in window coordinates
+          let webViewFrameInWindow = webView.convert(webView.bounds, to: nil)
+
+          // Convert from screen to window coordinates
+          let windowPoint = window.convertPoint(fromScreen: screenPoint)
+
+          // Calculate position relative to WebView's top-left in window coords
+          // Window coords have origin at bottom-left, so WebView's top edge is at maxY
+          let relativeX = windowPoint.x - webViewFrameInWindow.minX
+          let relativeY = webViewFrameInWindow.maxY - windowPoint.y  // Flip Y for top-left origin
+
+          let position = LineClickPosition(
+            lineNumber: lineNumber,
+            side: side,
+            lineY: relativeY,
+            lineHeight: 22 // Default line height estimate
+          )
+
+          // Pass position relative to WebView with top-left origin (matches SwiftUI)
+          let localPoint = CGPoint(x: relativeX, y: relativeY)
+          onLineClickWithPosition(position, localPoint)
+        }
+      }
 
     case .selectionChanged(let startLine, let endLine, let side):
       DiffLogger.info("Selection changed: lines \(startLine)-\(endLine) on \(side)")
@@ -252,7 +303,9 @@ extension DiffWebViewCoordinator: WKScriptMessageHandler {
     case "lineClicked":
       let lineNumber = body["lineNumber"] as? Int ?? 0
       let side = body["side"] as? String ?? "unknown"
-      event = .lineClicked(lineNumber: lineNumber, side: side)
+      let lineY = (body["lineY"] as? NSNumber)?.doubleValue ?? 0
+      let lineHeight = (body["lineHeight"] as? NSNumber)?.doubleValue ?? 20
+      event = .lineClicked(lineNumber: lineNumber, side: side, lineY: CGFloat(lineY), lineHeight: CGFloat(lineHeight))
 
     case "selectionChanged":
       let startLine = body["startLine"] as? Int ?? 0

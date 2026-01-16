@@ -83,6 +83,7 @@ PierreDiffView(
     diffStyle: Binding<DiffStyle>,
     overflowMode: Binding<OverflowMode>,
     onLineClick: ((Int, String) -> Void)? = nil,
+    onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)? = nil,
     onExpandRequest: (() -> Void)? = nil
 )
 ```
@@ -148,6 +149,19 @@ enum DiffStyle: String, CaseIterable {
 enum OverflowMode: String, CaseIterable {
     case scroll  // Horizontal scrolling for long lines
     case wrap    // Word wrap long lines
+}
+```
+
+#### `LineClickPosition`
+
+Context about a clicked line in the diff view.
+
+```swift
+struct LineClickPosition {
+    let lineNumber: Int     // The line number clicked
+    let side: String        // "left", "right", or "unified"
+    let lineY: CGFloat      // Y position in view coordinates
+    let lineHeight: CGFloat // Estimated line height
 }
 ```
 
@@ -224,6 +238,23 @@ class DefaultFileDataReader: FileDataReader
 ```
 
 ## Examples
+
+### Line Click with Position
+
+```swift
+PierreDiffView(
+    oldContent: oldText,
+    newContent: newText,
+    fileName: "example.swift",
+    diffStyle: $diffStyle,
+    overflowMode: $overflowMode,
+    onLineClickWithPosition: { position, localPoint in
+        // localPoint is in SwiftUI coordinates (origin top-left)
+        // Use to position floating editors, popovers, tooltips, etc.
+        print("Clicked line \(position.lineNumber) at \(localPoint)")
+    }
+)
+```
 
 ### Processing Edit Tool Response
 

@@ -212,8 +212,9 @@ window.pierreBridge = {
         lineDiffType: 'word-alt',
         overflow: currentOverflow,
         enableLineSelection: options.enableLineSelection ?? true,
-        onLineClick: ({ lineNumber, side, event }) => {
-          postToSwift('lineClicked', { lineNumber, side });
+        onLineClick: ({ lineNumber, side }) => {
+          // Send line info to Swift - positioning is handled via NSEvent.mouseLocation
+          postToSwift('lineClicked', { lineNumber, side, lineY: 0, lineHeight: 22 });
         },
         onLineSelectionEnd: (range) => {
           if (range) {
