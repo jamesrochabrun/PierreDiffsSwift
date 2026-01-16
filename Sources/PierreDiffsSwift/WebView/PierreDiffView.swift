@@ -38,6 +38,9 @@ public struct PierreDiffView: NSViewRepresentable {
   /// Callback when the user clicks on a line
   var onLineClick: ((Int, String) -> Void)?
 
+  /// Callback when the user clicks on a line, with position data for UI overlay positioning
+  var onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)?
+
   /// Callback when the view requests expansion to full screen
   var onExpandRequest: (() -> Void)?
 
@@ -57,6 +60,7 @@ public struct PierreDiffView: NSViewRepresentable {
     diffStyle: Binding<DiffStyle>,
     overflowMode: Binding<OverflowMode>,
     onLineClick: ((Int, String) -> Void)? = nil,
+    onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)? = nil,
     onExpandRequest: (() -> Void)? = nil,
     onReady: (() -> Void)? = nil
   ) {
@@ -66,6 +70,7 @@ public struct PierreDiffView: NSViewRepresentable {
     self._diffStyle = diffStyle
     self._overflowMode = overflowMode
     self.onLineClick = onLineClick
+    self.onLineClickWithPosition = onLineClickWithPosition
     self.onExpandRequest = onExpandRequest
     self.onReady = onReady
   }
@@ -146,6 +151,7 @@ public struct PierreDiffView: NSViewRepresentable {
   public func makeCoordinator() -> DiffWebViewCoordinator {
     DiffWebViewCoordinator(
       onLineClick: onLineClick,
+      onLineClickWithPosition: onLineClickWithPosition,
       onExpandRequest: onExpandRequest,
       onReady: onReady
     )
