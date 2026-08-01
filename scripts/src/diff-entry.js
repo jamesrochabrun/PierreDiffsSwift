@@ -68,6 +68,100 @@ function preservingScrollPosition(update) {
 }
 
 /**
+ * The shadow root the diff rows live in, or null before the first render.
+ */
+function getDiffShadowRoot() {
+  return getContainer().querySelector('diffs-container')?.shadowRoot ?? null;
+}
+
+/**
+ * Describes the line row sitting closest to the top of the viewport, so the
+ * same row can be found again after a re-render replaces the DOM.
+ */
+function captureReadingAnchor() {
+  const root = getDiffShadowRoot();
+  if (!root) return null;
+
+  const containerTop = getContainer().getBoundingClientRect().top;
+  for (const row of root.querySelectorAll('[data-line]')) {
+    const { top, bottom } = row.getBoundingClientRect();
+    if (bottom <= containerTop) continue;
+    return {
+      line: row.getAttribute('data-line'),
+      side: row.closest('[data-additions]') ? 'additions'
+        : row.closest('[data-deletions]') ? 'deletions'
+        : 'unified',
+      offset: top - containerTop,
+    };
+  }
+  return null;
+}
+
+/**
+ * Scrolls the container so `anchor`'s row sits where it did before the
+ * re-render. Falls back to leaving the scroll alone when the row is gone.
+ */
+function restoreReadingAnchor(anchor) {
+  if (!anchor) return;
+  const root = getDiffShadowRoot();
+  if (!root) return;
+
+  const container = getContainer();
+  const containerTop = container.getBoundingClientRect().top;
+  for (const row of root.querySelectorAll(`[data-line="${anchor.line}"]`)) {
+    const side = row.closest('[data-additions]') ? 'additions'
+      : row.closest('[data-deletions]') ? 'deletions'
+      : 'unified';
+    if (side !== anchor.side) continue;
+    container.scrollTop += row.getBoundingClientRect().top - containerTop - anchor.offset;
+    return;
+  }
+}
+
+/**
+ * Runs a DOM update that rebuilds the diff, keeping the user's reading
+ * position fixed.
+ *
+ * Expanding a collapsed-context hunk re-renders the whole diff: the scroll
+ * container is rebuilt (WebKit snaps it back to the top) and, when expanding
+ * upward, the freshly revealed lines are inserted *above* the separator, so
+ * even a restored scrollTop would leave the reader somewhere else in the file.
+ * Anchoring on a line row survives both.
+ */
+function preservingReadingPosition(update) {
+  const anchor = captureReadingAnchor();
+  const container = getContainer();
+  const scrollLeft = container.scrollLeft;
+
+  const restore = () => {
+    container.scrollLeft = scrollLeft;
+    restoreReadingAnchor(anchor);
+  };
+
+  const result = update(container);
+  restore();
+  requestAnimationFrame(restore);
+  setTimeout(restore, 0);
+  return result;
+}
+
+/**
+ * Wraps a FileDiff's `expandHunk` so clicking a collapsed-context separator
+ * keeps the reader where they were instead of snapping the diff to the top.
+ *
+ * The instance method is what the interaction manager ultimately calls, so
+ * replacing it here covers every expansion trigger (the gutter arrows, the
+ * "N unchanged lines" row and shift-click expand-all).
+ */
+function anchorHunkExpansion(instance) {
+  const expandHunk = instance.expandHunk;
+  if (typeof expandHunk !== 'function') return;
+
+  instance.expandHunk = (...args) =>
+    preservingReadingPosition(() => expandHunk.apply(instance, args));
+}
+
+/**
  * Detects the language from a filename
  */
 function detectLanguage(fileName) {
@@ -365,6 +459,7 @@ window.pierreBridge = {
 
       // Create FileDiff instance
       currentDiffInstance = new FileDiff(fileDiffOptions);
+      anchorHunkExpansion(currentDiffInstance);
 
       // Render the diff
       currentDiffInstance.render({
