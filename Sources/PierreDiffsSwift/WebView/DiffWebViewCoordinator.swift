@@ -215,25 +215,36 @@ public final class DiffWebViewCoordinator: NSObject {
       // Use base64 encoding to safely transfer data with special characters
       let base64String = jsonData.base64EncodedString()
 
-      // JavaScript will decode base64 and parse JSON
-      let script = """
-      (function() {
-        try {
-          const decoded = atob('\(base64String)');
-          const input = JSON.parse(decoded);
-          window.pierreBridge.\(method)(input);
-        } catch (e) {
-          console.error('Failed to decode/parse input:', e);
-          if (window.webkit?.messageHandlers?.diffBridge) {
-            window.webkit.messageHandlers.diffBridge.postMessage({ type: 'error', message: e.message });
-          }
-        }
-      })();
-      """
-      evaluateJavaScript(script)
+      evaluateJavaScript(Self.bridgeScript(method: method, base64Payload: base64String))
     } catch {
       DiffLogger.error("DiffWebViewCoordinator: Failed to encode input: \(error)")
     }
+  }
+
+  /// The JavaScript trampoline that hands a base64-encoded JSON payload to the
+  /// page's bridge object.
+  ///
+  /// `atob` yields one JavaScript character per *byte*, so parsing its result
+  /// directly reads the UTF-8 bytes JSONEncoder produced as Latin-1, and every
+  /// non-ASCII scalar surfaces as mojibake: an en dash arrives as two stray
+  /// characters, accented file contents are garbled, emoji are destroyed.
+  /// Feeding the bytes through `TextDecoder` keeps the payload UTF-8 clean.
+  static func bridgeScript(method: String, base64Payload: String) -> String {
+    """
+    (function() {
+      try {
+        const binary = atob('\(base64Payload)');
+        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        const input = JSON.parse(new TextDecoder('utf-8').decode(bytes));
+        window.pierreBridge.\(method)(input);
+      } catch (e) {
+        console.error('Failed to decode/parse input:', e);
+        if (window.webkit?.messageHandlers?.diffBridge) {
+          window.webkit.messageHandlers.diffBridge.postMessage({ type: 'error', message: e.message });
+        }
+      }
+    })();
+    """
   }
 
   private func evaluateJavaScript(_ script: String) {
