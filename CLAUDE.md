@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-A Swift package that wraps the `@pierre/diffs` JavaScript library (v1.2.7) to render syntax-highlighted code diffs in macOS apps via WKWebView. It provides SwiftUI views, line interaction callbacks, and an inline annotation system.
+A Swift package that wraps the `@pierre/diffs` JavaScript library (v1.3.5) to render and edit syntax-highlighted code diffs in macOS apps via WKWebView. It provides SwiftUI views, line interaction callbacks, inline annotations, and an opt-in editor.
 
 ## Architecture
 
@@ -10,7 +10,8 @@ A Swift package that wraps the `@pierre/diffs` JavaScript library (v1.2.7) to re
 PierreDiffView (SwiftUI NSViewRepresentable)
   ├── WKWebView
   │     ├── DiffHTMLTemplate (HTML + CSS)
-  │     └── pierre-diffs-bundle.js (esbuild bundle of @pierre/diffs + diff-entry.js)
+  │     ├── pierre-diffs-bundle.js (read-only @pierre/diffs + bridge)
+  │     └── pierre-diffs-edit-bundle.js (lazy @pierre/diffs/edit bundle)
   ├── DiffWebViewCoordinator (WKNavigationDelegate + WKScriptMessageHandler)
   │     ├── JS → Swift messaging via webkit.messageHandlers.diffBridge
   │     └── Swift → JS via evaluateJavaScript / base64-encoded callJavaScript
@@ -28,11 +29,14 @@ PierreDiffView (SwiftUI NSViewRepresentable)
 | `Sources/.../Models/DiffAnnotation.swift` | `DiffAnnotation`, `AnnotationMetadata`, `AnnotationSide` |
 | `Sources/.../Models/PierreDiffInput.swift` | Codable input sent to JS `renderDiff()` |
 | `Sources/.../Types/PierreDiffRenderOptions.swift` | Public renderer option types passed through to `FileDiff` |
+| `Sources/.../Types/PierreDiffEditorOptions.swift` | Public editor behavior and selection-action configuration |
+| `Sources/.../State/PierreDiffEditorController.swift` | Reactive state and imperative editor commands |
 | `Sources/.../Models/LineClickPosition.swift` | Position data for line click callbacks |
 | `Sources/.../Models/LineSelectionRange.swift` | Range data for multi-line selection callbacks |
 | `scripts/src/diff-entry.js` | JS entry point — bridge API, annotation DOM, events |
 | `scripts/bundle.js` | esbuild config |
-| `scripts/package.json` | npm deps (`@pierre/diffs` pinned to 1.2.7) |
+| `scripts/src/edit-entry.js` | Separate lazy editor bundle entry point |
+| `scripts/package.json` | npm deps (`@pierre/diffs` 1.3.5 and compatible Shiki packages 4.4.1) |
 | `CHANGELOG.md` | Wrapper release notes |
 | `docs/upstream-pierre-diffs.md` | Upstream docs/version checklist for agents |
 
@@ -44,9 +48,11 @@ PierreDiffView (SwiftUI NSViewRepresentable)
 
 **Annotations**: Swift passes `[DiffAnnotation]` → encoded to JSON → JS `setLineAnnotations()` → `@pierre/diffs` calls `renderAnnotation(annotation)` → `createAnnotationDOM()` builds HTML element
 
+**Editing**: Swift enables edit mode → coordinator evaluates the lazy editor bundle once → JS attaches `Editor` to the existing `FileDiff` → complete content, normalized edits, and shifted annotations flow back through `PierreDiffEditChange`
+
 ### Change Detection
 
-`updateNSView` tracks previous values via coordinator properties (`lastOldContent`, `lastDiffStyle`, `lastRenderOptions`, `lastAnnotations`, etc.) and only calls the relevant JS method when a specific property changes. Content and render option changes trigger full re-render; style/theme/overflow/annotation changes use targeted update methods.
+`updateNSView` tracks previous values via coordinator properties (`lastOldContent`, `lastDiffStyle`, `lastRenderOptions`, `lastAnnotations`, editor configuration, markers, etc.) and only calls the relevant JS method when a specific property changes. Content and render option changes trigger full re-render; style/theme/overflow/annotation/editor changes use targeted update methods. Editor-originated controlled echoes are absorbed without replacing the DOM or undo history.
 
 ## Upstream Docs
 
@@ -57,8 +63,8 @@ Current low-risk pass-through options live in `PierreDiffRenderOptions`: theme p
 ## Build Commands
 
 ```bash
-# Rebuild JS bundle after editing scripts/src/diff-entry.js
-cd scripts && npm install && npm run build
+# Rebuild read-only and lazy edit JS bundles
+cd scripts && npm ci && npm run build
 
 # Build Swift package
 swift build
@@ -74,6 +80,8 @@ swift test
 - JS communication uses base64-encoded JSON to handle special characters safely
 - CSS is theme-aware via `@media (prefers-color-scheme: dark)`
 - Position callbacks use `NSEvent.mouseLocation` converted to WebView-local coordinates (top-left origin, matches SwiftUI)
+- Edit mode is experimental and requires macOS 14.5+ (WebKit/Safari 17.5+); read-only rendering retains macOS 14.0+
+- Keep `shiki`, `@shikijs/themes`, and `@shikijs/transformers` pinned to 4.4.1 unless an upstream update is verified; the Shiki 3.x tree lacks theme modules referenced by `@pierre/diffs` 1.3.5
 
 ## Annotation System
 

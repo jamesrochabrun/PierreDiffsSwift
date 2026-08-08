@@ -18,6 +18,11 @@ let currentDiffStyle = 'split';
 let currentOverflow = 'scroll';
 let currentOldFile = null;
 let currentNewFile = null;
+let currentEditor = null;
+let currentEditorDispose = null;
+let currentEditorRequested = false;
+let currentEditorOptions = {};
+let currentMarkers = [];
 
 /**
  * Sends a message to Swift via webkit message handler
@@ -252,6 +257,165 @@ function createAnnotationDOM(annotation) {
   return container;
 }
 
+function postEditorState(overrides = {}) {
+  postToSwift('editorStateChanged', {
+    content: currentEditor?.getText() || currentNewFile?.contents || '',
+    isAttached: currentEditor != null,
+    canUndo: currentEditor?.canUndo || false,
+    canRedo: currentEditor?.canRedo || false,
+    ...overrides,
+  });
+}
+
+function createSelectionActionDOM(context) {
+  const container = document.createElement('div');
+  container.className = 'pierre-selection-actions';
+
+  // The editor reparents this element into its ShadowRoot, so the action's
+  // styles need to travel with the rendered element.
+  const style = document.createElement('style');
+  style.textContent = `
+    .pierre-selection-actions {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid rgba(140, 140, 160, 0.25);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+      font: 12px -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    }
+    .pierre-selection-actions button {
+      border: 0;
+      border-radius: 5px;
+      padding: 5px 8px;
+      background: transparent;
+      color: #262626;
+      font: inherit;
+      cursor: pointer;
+    }
+    .pierre-selection-actions button:hover,
+    .pierre-selection-actions button:focus-visible {
+      background: rgba(120, 87, 255, 0.12);
+      outline: none;
+    }
+    @media (prefers-color-scheme: dark) {
+      .pierre-selection-actions {
+        border-color: rgba(160, 160, 180, 0.28);
+        background: rgba(31, 31, 35, 0.97);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      }
+      .pierre-selection-actions button { color: #f0f0f0; }
+    }
+  `;
+  container.appendChild(style);
+
+  for (const action of currentEditorOptions.selectionActions || []) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = action.title;
+    button.setAttribute('aria-label', action.title);
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      postToSwift('editorSelectionAction', {
+        actionID: action.id,
+        selectedText: context.getSelectionText(),
+        selection: context.selection,
+      });
+      context.close();
+    });
+    container.appendChild(button);
+  }
+
+  return container;
+}
+
+function resolvedKeymap(options) {
+  const bindings = options.keymap || {};
+  return Object.keys(bindings).length > 0
+    ? [{ platform: 'mac', bindings }]
+    : undefined;
+}
+
+function createEditorOptions() {
+  const Editor = window.PierreDiffsEdit?.Editor;
+  if (!Editor) return null;
+
+  return {
+    historyMaxEntries: currentEditorOptions.historyMaxEntries ?? 100,
+    roundedSelection: currentEditorOptions.roundedSelection ?? true,
+    matchBrackets: currentEditorOptions.matchBrackets ?? true,
+    autoSurround: currentEditorOptions.autoSurround || 'default',
+    keymap: resolvedKeymap(currentEditorOptions),
+    enabledSelectionAction: (currentEditorOptions.selectionActions?.length || 0) > 0,
+    renderSelectionAction: createSelectionActionDOM,
+    onAttach: () => {
+      if (currentMarkers.length > 0) {
+        currentEditor?.setMarkers(currentMarkers);
+      }
+      postEditorState({ isAttached: true });
+    },
+    onChange: (file, lineAnnotations, event) => {
+      currentNewFile = {
+        ...currentNewFile,
+        ...file,
+        contents: file.contents,
+      };
+      postToSwift('editorChanged', {
+        fileName: file.name || currentNewFile?.name || '',
+        content: file.contents,
+        annotations: lineAnnotations,
+        changes: event.changes || [],
+        canUndo: currentEditor?.canUndo || false,
+        canRedo: currentEditor?.canRedo || false,
+      });
+      postEditorState();
+    },
+    onFocus: () => {
+      postToSwift('editorFocused');
+      postEditorState({ isFocused: true });
+    },
+    onBlur: () => {
+      postToSwift('editorBlurred');
+      postEditorState({ isFocused: false });
+    },
+  };
+}
+
+function detachEditor() {
+  if (currentEditorDispose) {
+    currentEditorDispose();
+  } else {
+    currentEditor?.cleanUp();
+  }
+  currentEditorDispose = null;
+  currentEditor = null;
+  postEditorState({ isAttached: false, isFocused: false });
+}
+
+function attachEditor() {
+  if (!currentEditorRequested || !currentDiffInstance || currentEditor) return;
+
+  const Editor = window.PierreDiffsEdit?.Editor;
+  const options = createEditorOptions();
+  if (!Editor || !options) {
+    postToSwift('editorError', {
+      message: 'The @pierre/diffs edit bundle is not loaded.',
+    });
+    return;
+  }
+
+  try {
+    currentEditor = new Editor(options);
+    currentEditorDispose = currentEditor.edit(currentDiffInstance);
+  } catch (error) {
+    currentEditorDispose = null;
+    currentEditor = null;
+    postToSwift('editorError', { message: error.message });
+  }
+}
+
 /**
  * Bridge object exposed to Swift
  */
@@ -268,6 +432,9 @@ window.pierreBridge = {
       const { oldFile, newFile, options = {} } = input;
 
       // Clean up previous instance
+      if (currentEditor) {
+        detachEditor();
+      }
       if (currentDiffInstance) {
         currentDiffInstance.cleanUp();
         currentDiffInstance = null;
@@ -373,6 +540,8 @@ window.pierreBridge = {
         containerWrapper: container,
         lineAnnotations: input.lineAnnotations || [],
       });
+
+      attachEditor();
 
       postToSwift('ready');
     } catch (error) {
@@ -481,16 +650,91 @@ window.pierreBridge = {
     this.setAnnotations([]);
   },
 
+  /** Enables or disables edit mode after the optional editor bundle is loaded. */
+  setEditing(configuration = {}) {
+    currentEditorRequested = configuration.enabled === true;
+    currentEditorOptions = configuration.options || currentEditorOptions;
+    currentMarkers = configuration.markers || currentMarkers;
+
+    if (currentEditorRequested) {
+      attachEditor();
+    } else if (currentEditor) {
+      detachEditor();
+    }
+  },
+
+  /** Updates editor behavior without re-rendering the diff. */
+  setEditorOptions(options = {}) {
+    currentEditorOptions = options;
+    if (currentEditor) {
+      currentEditor.setOptions(createEditorOptions());
+      postEditorState();
+    }
+  },
+
+  /** Replaces all severity markers in the editable new-file document. */
+  setMarkers(markers = []) {
+    currentMarkers = markers;
+    if (!currentEditor) return;
+    try {
+      currentEditor.setMarkers(markers);
+    } catch (error) {
+      postToSwift('editorError', { message: error.message });
+    }
+  },
+
+  /** Runs an imperative command from PierreDiffEditorController. */
+  editorCommand(command) {
+    if (!currentEditor) return;
+    try {
+      switch (command.type) {
+        case 'undo':
+          currentEditor.undo();
+          break;
+        case 'redo':
+          currentEditor.redo();
+          break;
+        case 'focus':
+          currentEditor.focus({
+            lineNumber: command.lineNumber ?? undefined,
+            character: command.character ?? 0,
+          });
+          break;
+        case 'blur':
+          currentEditor.blur();
+          break;
+        case 'applyEdits':
+          currentEditor.applyEdits(command.edits || []);
+          break;
+        case 'setSelections':
+          currentEditor.setSelections(command.selections || []);
+          break;
+        case 'setMarkers':
+          this.setMarkers(command.markers || []);
+          break;
+      }
+      postEditorState();
+    } catch (error) {
+      postToSwift('editorError', { message: error.message });
+    }
+  },
+
   /**
    * Cleans up the current diff instance
    */
   cleanup() {
+    currentEditorRequested = false;
+    if (currentEditor) {
+      detachEditor();
+    }
     if (currentDiffInstance) {
       currentDiffInstance.cleanUp();
       currentDiffInstance = null;
     }
     currentOldFile = null;
     currentNewFile = null;
+    currentEditorOptions = {};
+    currentMarkers = [];
     const container = getContainer();
     container.innerHTML = '';
   },

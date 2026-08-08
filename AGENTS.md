@@ -6,7 +6,7 @@ This guide explains how to integrate PierreDiffsSwift's full feature set into a 
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/jamesrochabrun/PierreDiffsSwift", from: "1.2.0")
+.package(url: "https://github.com/jamesrochabrun/PierreDiffsSwift", from: "1.3.0")
 ```
 
 ## Upstream Docs Before Integration
@@ -30,12 +30,21 @@ PierreDiffView(
     diffStyle: Binding<DiffStyle>,                               // .split or .unified
     overflowMode: Binding<OverflowMode>,                         // .scroll or .wrap
     renderOptions: PierreDiffRenderOptions = .init(),             // Optional renderer controls
+    isEditing: Bool = false,                                     // Edit the new-file side
+    editorOptions: PierreDiffEditorOptions = .init(),            // Editor controls
+    markers: [PierreDiffMarker] = [],                            // Zero-based document markers
+    editorController: PierreDiffEditorController? = nil,         // Undo/redo/etc.
     annotations: [DiffAnnotation]? = nil,                        // Inline comments
     onLineClick: ((Int, String) -> Void)? = nil,                 // (lineNumber, side)
     onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)? = nil,  // With screen position
     onLineSelectionChange: ((LineSelectionRange) -> Void)? = nil, // Multi-line drag
     onAnnotationClick: ((String, String, Int, CGPoint) -> Void)? = nil,      // (id, side, lineNumber, localPoint)
     onAnnotationDelete: ((String, String, Int) -> Void)? = nil,              // (id, side, lineNumber)
+    onEditChange: ((PierreDiffEditChange) -> Void)? = nil,                   // Full content + shifted annotations
+    onEditFocus: (() -> Void)? = nil,
+    onEditBlur: (() -> Void)? = nil,
+    onSelectionAction: ((PierreDiffSelectionActionEvent) -> Void)? = nil,
+    onEditError: ((String) -> Void)? = nil,
     onExpandRequest: (() -> Void)? = nil,
     onReady: (() -> Void)? = nil
 )
@@ -67,6 +76,83 @@ PierreDiffRenderOptions(
 ```
 
 Option changes trigger a full `FileDiff` re-render. Annotation-only changes still use dynamic `setLineAnnotations()`.
+
+## Edit Mode (Experimental)
+
+`PierreDiffView` can attach the vanilla `Editor` from `@pierre/diffs/edit` to the existing `FileDiff`. The editor bundle is separate and is evaluated only when `isEditing` first becomes `true`. Read-only views do not load editor code.
+
+Only the new-file side is editable. Deleted lines remain read-only in unified and split modes. Edit mode requires WebKit/Safari 17.5+ (macOS 14.5+); read-only rendering retains the package's macOS 14.0 floor.
+
+### Controlled Data Flow
+
+The consumer owns edited content and annotations:
+
+```swift
+@State private var newContent = initialNewContent
+@State private var annotations: [DiffAnnotation] = []
+@State private var isEditing = false
+@State private var editor = PierreDiffEditorController()
+
+PierreDiffView(
+    oldContent: oldContent,
+    newContent: newContent,
+    fileName: fileName,
+    diffStyle: $diffStyle,
+    overflowMode: $overflowMode,
+    isEditing: isEditing,
+    editorOptions: PierreDiffEditorOptions(
+        historyMaxEntries: 100,
+        roundedSelection: true,
+        matchBrackets: true,
+        autoSurround: .default,
+        keymap: ["cmd+Enter": .insertBlankLine],
+        selectionActions: [
+            .init(id: "add-to-chat", title: "Add to chat")
+        ]
+    ),
+    editorController: editor,
+    annotations: annotations,
+    onEditChange: { change in
+        newContent = change.content
+        annotations = change.annotations ?? []
+    },
+    onSelectionAction: { event in
+        addToChat(event.selectedText)
+    }
+)
+```
+
+`PierreDiffEditChange` contains the complete updated content, normalized replacements, undo/redo availability, and the editor's structurally shifted annotations. Always publish `change.annotations` back to the state that produces the `annotations` prop; additions-side annotations follow line changes and undo history.
+
+SwiftUI echoes matching content and annotations are absorbed by the coordinator without replacing the editor DOM, preserving carets and undo history. A genuinely different `newContent` value remains an external controlled update and triggers a full render.
+
+### Markers
+
+Markers use zero-based document positions, matching upstream editor ranges:
+
+```swift
+let markers = [
+    PierreDiffMarker(
+        start: .init(line: 4, character: 2),
+        end: .init(line: 4, character: 12),
+        severity: .warning,
+        message: "This value is never read",
+        source: "SwiftLint"
+    )
+]
+```
+
+Pass markers declaratively through `PierreDiffView(markers:)` or update them imperatively with `editor.setMarkers(markers)`. Upstream markers do not move automatically when text changes, so recompute them in response to `onEditChange`.
+
+### Editor Controller
+
+`PierreDiffEditorController` publishes `isAttached`, `isFocused`, `canUndo`, `canRedo`, and `content`. It provides `undo()`, `redo()`, `focus(lineNumber:character:)`, `blur()`, `applyEdits(_:)`, `setSelections(_:)`, and `setMarkers(_:)`.
+
+`PierreDiffTextPosition`, `PierreDiffTextRange`, `PierreDiffTextEdit`, and `PierreDiffEditorSelection` all use zero-based lines and character offsets. `focus(lineNumber:)` is the exception because upstream's focus API takes a one-based line number.
+
+### Bundle Maintenance
+
+The pinned edit implementation is `@pierre/diffs` 1.3.5. `scripts/src/diff-entry.js` must not import `@pierre/diffs/edit`; `scripts/src/edit-entry.js` is the lazy entry. The script manifest also pins `shiki`, `@shikijs/themes`, and `@shikijs/transformers` to 4.4.1 because an npm install can otherwise preserve the older Shiki 3.x tree, which lacks theme exports referenced by Pierre 1.3.5. Run `cd scripts && npm ci && npm run build` and commit both `pierre-diffs-bundle.js` and `pierre-diffs-edit-bundle.js` after any dependency or bridge change.
 
 ## Feature 1: Line Click with Position
 

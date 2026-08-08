@@ -38,6 +38,18 @@ public struct PierreDiffView: NSViewRepresentable {
   /// Additional renderer options passed through to @pierre/diffs
   var renderOptions: PierreDiffRenderOptions
 
+  /// Whether the new-file side is editable in place.
+  var isEditing: Bool
+
+  /// Configuration for the lazy-loaded experimental editor.
+  var editorOptions: PierreDiffEditorOptions
+
+  /// Severity-aware markers in the zero-based new-file document.
+  var markers: [PierreDiffMarker]
+
+  /// Optional reactive handle for undo, redo, focus, and programmatic edits.
+  var editorController: PierreDiffEditorController?
+
   /// Callback when the user clicks on a line
   var onLineClick: ((Int, String) -> Void)?
 
@@ -62,6 +74,21 @@ public struct PierreDiffView: NSViewRepresentable {
   /// Callback when the WebView is ready to display content
   var onReady: (() -> Void)?
 
+  /// Callback containing the complete edited content and shifted annotations.
+  var onEditChange: ((PierreDiffEditChange) -> Void)?
+
+  /// Callback when the editor gains focus.
+  var onEditFocus: (() -> Void)?
+
+  /// Callback when the editor loses focus.
+  var onEditBlur: (() -> Void)?
+
+  /// Callback when a configured selection action is chosen.
+  var onSelectionAction: ((PierreDiffSelectionActionEvent) -> Void)?
+
+  /// Callback when the experimental editor reports an error.
+  var onEditError: ((String) -> Void)?
+
   // MARK: - Environment
 
   @Environment(\.colorScheme) private var colorScheme
@@ -75,12 +102,21 @@ public struct PierreDiffView: NSViewRepresentable {
     diffStyle: Binding<DiffStyle>,
     overflowMode: Binding<OverflowMode>,
     renderOptions: PierreDiffRenderOptions = PierreDiffRenderOptions(),
+    isEditing: Bool = false,
+    editorOptions: PierreDiffEditorOptions = PierreDiffEditorOptions(),
+    markers: [PierreDiffMarker] = [],
+    editorController: PierreDiffEditorController? = nil,
     annotations: [DiffAnnotation]? = nil,
     onLineClick: ((Int, String) -> Void)? = nil,
     onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)? = nil,
     onLineSelectionChange: ((LineSelectionRange) -> Void)? = nil,
     onAnnotationClick: ((String, String, Int, CGPoint) -> Void)? = nil,
     onAnnotationDelete: ((String, String, Int) -> Void)? = nil,
+    onEditChange: ((PierreDiffEditChange) -> Void)? = nil,
+    onEditFocus: (() -> Void)? = nil,
+    onEditBlur: (() -> Void)? = nil,
+    onSelectionAction: ((PierreDiffSelectionActionEvent) -> Void)? = nil,
+    onEditError: ((String) -> Void)? = nil,
     onExpandRequest: (() -> Void)? = nil,
     onReady: (() -> Void)? = nil
   ) {
@@ -90,12 +126,21 @@ public struct PierreDiffView: NSViewRepresentable {
     self._diffStyle = diffStyle
     self._overflowMode = overflowMode
     self.renderOptions = renderOptions
+    self.isEditing = isEditing
+    self.editorOptions = editorOptions
+    self.markers = markers
+    self.editorController = editorController
     self.annotations = annotations
     self.onLineClick = onLineClick
     self.onLineClickWithPosition = onLineClickWithPosition
     self.onLineSelectionChange = onLineSelectionChange
     self.onAnnotationClick = onAnnotationClick
     self.onAnnotationDelete = onAnnotationDelete
+    self.onEditChange = onEditChange
+    self.onEditFocus = onEditFocus
+    self.onEditBlur = onEditBlur
+    self.onSelectionAction = onSelectionAction
+    self.onEditError = onEditError
     self.onExpandRequest = onExpandRequest
     self.onReady = onReady
   }
@@ -133,6 +178,29 @@ public struct PierreDiffView: NSViewRepresentable {
   public func updateNSView(_ webView: WKWebView, context: Context) {
     let coordinator = context.coordinator
 
+    coordinator.onLineClick = onLineClick
+    coordinator.onLineClickWithPosition = onLineClickWithPosition
+    coordinator.onLineSelectionChange = onLineSelectionChange
+    coordinator.onExpandRequest = onExpandRequest
+    coordinator.onReady = onReady
+    coordinator.onAnnotationClick = onAnnotationClick
+    coordinator.onAnnotationDelete = onAnnotationDelete
+    coordinator.onEditChange = onEditChange
+    coordinator.onEditFocus = onEditFocus
+    coordinator.onEditBlur = onEditBlur
+    coordinator.onSelectionAction = onSelectionAction
+    coordinator.onEditError = onEditError
+    coordinator.setEditorController(editorController)
+
+    // Accept controlled echoes of an editor-originated update without replacing
+    // the editor DOM or its undo history.
+    if coordinator.lastEditedContent == newContent {
+      coordinator.lastNewContent = newContent
+    }
+    if coordinator.lastEditedAnnotations == annotations {
+      coordinator.lastAnnotations = annotations
+    }
+
     // Check if content has changed
     let contentChanged = coordinator.lastOldContent != oldContent ||
                          coordinator.lastNewContent != newContent ||
@@ -153,6 +221,9 @@ public struct PierreDiffView: NSViewRepresentable {
 
     // Check if annotations have changed
     let annotationsChanged = coordinator.lastAnnotations != annotations
+    let editingChanged = coordinator.lastIsEditing != isEditing
+    let editorOptionsChanged = coordinator.lastEditorOptions != editorOptions
+    let markersChanged = coordinator.lastMarkers != markers
     let requiresFullRender = contentChanged || renderOptionsChanged
 
     if requiresFullRender {
@@ -164,6 +235,9 @@ public struct PierreDiffView: NSViewRepresentable {
       coordinator.lastTheme = currentTheme
       coordinator.lastRenderOptions = renderOptions
       coordinator.lastAnnotations = annotations
+      coordinator.lastIsEditing = isEditing
+      coordinator.lastEditorOptions = editorOptions
+      coordinator.lastMarkers = markers
       coordinator.renderDiff(
         oldContent: oldContent,
         newContent: newContent,
@@ -193,6 +267,26 @@ public struct PierreDiffView: NSViewRepresentable {
         coordinator.removeAnnotations()
       }
     }
+
+
+    if !requiresFullRender && editorOptionsChanged {
+      coordinator.lastEditorOptions = editorOptions
+      coordinator.setEditorOptions(editorOptions)
+    }
+
+    if !requiresFullRender && markersChanged {
+      coordinator.lastMarkers = markers
+      coordinator.setMarkers(markers)
+    }
+
+    if requiresFullRender || editingChanged {
+      coordinator.lastIsEditing = isEditing
+      coordinator.setEditing(
+        isEditing,
+        options: editorOptions,
+        markers: markers
+      )
+    }
   }
 
   public func makeCoordinator() -> DiffWebViewCoordinator {
@@ -203,7 +297,13 @@ public struct PierreDiffView: NSViewRepresentable {
       onExpandRequest: onExpandRequest,
       onReady: onReady,
       onAnnotationClick: onAnnotationClick,
-      onAnnotationDelete: onAnnotationDelete
+      onAnnotationDelete: onAnnotationDelete,
+      onEditChange: onEditChange,
+      onEditFocus: onEditFocus,
+      onEditBlur: onEditBlur,
+      onSelectionAction: onSelectionAction,
+      onEditError: onEditError,
+      editorController: editorController
     )
   }
 
