@@ -68,6 +68,34 @@ enum DiffHTMLTemplate {
     }
   }
 
+  /// Loads the optional editor bundle only when edit mode is requested.
+  static func loadBundledEditorJavaScript() -> String? {
+    var bundleURL = Bundle.module.url(
+      forResource: "pierre-diffs-edit-bundle",
+      withExtension: "js",
+      subdirectory: "Resources"
+    )
+
+    if bundleURL == nil {
+      bundleURL = Bundle.module.url(
+        forResource: "pierre-diffs-edit-bundle",
+        withExtension: "js"
+      )
+    }
+
+    guard let bundleURL else {
+      DiffLogger.error("DiffHTMLTemplate: Could not find pierre-diffs-edit-bundle.js in bundle")
+      return nil
+    }
+
+    do {
+      return try String(contentsOf: bundleURL, encoding: .utf8)
+    } catch {
+      DiffLogger.error("DiffHTMLTemplate: Failed to load pierre-diffs-edit-bundle.js: \(error)")
+      return nil
+    }
+  }
+
   /// Fallback JavaScript when bundle loading fails
   private static let fallbackJavaScript = """
   window.pierreBridge = {
@@ -82,6 +110,10 @@ enum DiffHTMLTemplate {
     setDiffStyle: function() {},
     scrollToLine: function() {},
     getSelection: function() { return ''; },
+    setEditing: function() {},
+    setEditorOptions: function() {},
+    setMarkers: function() {},
+    editorCommand: function() {},
     cleanup: function() {}
   };
   """
@@ -157,6 +189,33 @@ enum DiffHTMLTemplate {
   /* Selection styling */
   ::selection {
     background-color: rgba(59, 130, 246, 0.3);
+  }
+
+  .pierre-selection-actions {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid rgba(140, 140, 160, 0.25);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  }
+
+  .pierre-selection-actions button {
+    border: 0;
+    border-radius: 5px;
+    padding: 5px 8px;
+    background: transparent;
+    color: #262626;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .pierre-selection-actions button:hover,
+  .pierre-selection-actions button:focus-visible {
+    background: rgba(120, 87, 255, 0.12);
+    outline: none;
   }
 
   /* Hide file header if desired */
@@ -270,6 +329,16 @@ enum DiffHTMLTemplate {
   }
 
   @media (prefers-color-scheme: dark) {
+    .pierre-selection-actions {
+      border-color: rgba(160, 160, 180, 0.28);
+      background: rgba(31, 31, 35, 0.97);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .pierre-selection-actions button {
+      color: #f0f0f0;
+    }
+
     .pierre-annotation {
       border-color: rgba(200, 200, 220, 0.1);
       border-left-color: rgba(120, 87, 255, 0.7);

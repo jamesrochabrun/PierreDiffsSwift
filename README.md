@@ -27,11 +27,15 @@ This is how we use it in [Claw](https://github.com/jamesrochabrun/Claw)
 - Multi-line drag selection with range callbacks
 - Inline annotations (comments) rendered inside the diff
 - Annotation click and delete callbacks for interactive review flows
+- Opt-in in-place editing of the new-file side with find/replace, multiple cursors, undo history, smart indentation, and built-in keyboard shortcuts
+- Severity markers, selection-action popovers, focus events, and programmatic editor commands
+- Separate lazy-loaded edit bundle; read-only views do not load editor code
 - SwiftUI-native views wrapping WKWebView
 
 ## Requirements
 
 - macOS 14.0+
+- macOS 14.5+ for edit mode (WebKit/Safari 17.5+)
 - Swift 6.0+
 - Xcode 16.0+
 
@@ -43,7 +47,7 @@ Add PierreDiffsSwift to your project using Swift Package Manager:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/jamesrochabrun/PierreDiffsSwift.git", from: "1.2.0")
+    .package(url: "https://github.com/jamesrochabrun/PierreDiffsSwift.git", from: "1.3.0")
 ]
 ```
 
@@ -80,6 +84,68 @@ struct ContentView: View {
 }
 ```
 
+### Live Editing
+
+Edit mode is controlled by your SwiftUI state. Keep the callback wired to your source of truth so parent views, saves, and later renders all see the latest document.
+
+```swift
+struct EditableDiffView: View {
+    let oldContent: String
+    let fileName: String
+
+    @State private var newContent: String
+    @State private var annotations: [DiffAnnotation] = []
+    @State private var isEditing = false
+    @State private var diffStyle: DiffStyle = .split
+    @State private var overflowMode: OverflowMode = .scroll
+    @State private var editor = PierreDiffEditorController()
+
+    init(oldContent: String, newContent: String, fileName: String) {
+        self.oldContent = oldContent
+        self.fileName = fileName
+        _newContent = State(initialValue: newContent)
+    }
+
+    var body: some View {
+        VStack {
+            Toggle("Edit", isOn: $isEditing)
+
+            HStack {
+                Button("Undo", action: editor.undo)
+                    .disabled(!editor.canUndo)
+                Button("Redo", action: editor.redo)
+                    .disabled(!editor.canRedo)
+            }
+
+            PierreDiffView(
+                oldContent: oldContent,
+                newContent: newContent,
+                fileName: fileName,
+                diffStyle: $diffStyle,
+                overflowMode: $overflowMode,
+                isEditing: isEditing,
+                editorOptions: PierreDiffEditorOptions(
+                    selectionActions: [
+                        .init(id: "add-to-chat", title: "Add to chat")
+                    ]
+                ),
+                editorController: editor,
+                annotations: annotations,
+                onEditChange: { change in
+                    newContent = change.content
+                    annotations = change.annotations ?? []
+                },
+                onSelectionAction: { event in
+                    addToChat(event.selectedText)
+                }
+            )
+        }
+    }
+}
+```
+
+Edit mode is experimental upstream. In a diff, only the new-file side is editable. Annotation positions on that side follow line inserts, deletes, merges, undo, and redo; use the annotations delivered by `onEditChange` as the next controlled value.
+
 ## API Reference
 
 ### Views
@@ -96,12 +162,21 @@ PierreDiffView(
     diffStyle: Binding<DiffStyle>,
     overflowMode: Binding<OverflowMode>,
     renderOptions: PierreDiffRenderOptions = .init(),
+    isEditing: Bool = false,
+    editorOptions: PierreDiffEditorOptions = .init(),
+    markers: [PierreDiffMarker] = [],
+    editorController: PierreDiffEditorController? = nil,
     annotations: [DiffAnnotation]? = nil,
     onLineClick: ((Int, String) -> Void)? = nil,
     onLineClickWithPosition: ((LineClickPosition, CGPoint) -> Void)? = nil,
     onLineSelectionChange: ((LineSelectionRange) -> Void)? = nil,
     onAnnotationClick: ((String, String, Int, CGPoint) -> Void)? = nil,
     onAnnotationDelete: ((String, String, Int) -> Void)? = nil,
+    onEditChange: ((PierreDiffEditChange) -> Void)? = nil,
+    onEditFocus: (() -> Void)? = nil,
+    onEditBlur: (() -> Void)? = nil,
+    onSelectionAction: ((PierreDiffSelectionActionEvent) -> Void)? = nil,
+    onEditError: ((String) -> Void)? = nil,
     onExpandRequest: (() -> Void)? = nil,
     onReady: (() -> Void)? = nil
 )
@@ -117,12 +192,20 @@ PierreDiffView(
 | `diffStyle` | `Binding<DiffStyle>` | `.split` or `.unified` |
 | `overflowMode` | `Binding<OverflowMode>` | `.scroll` or `.wrap` |
 | `renderOptions` | `PierreDiffRenderOptions` | Additional @pierre/diffs rendering controls |
+| `isEditing` | `Bool` | Enables the lazy-loaded editor on the new-file side |
+| `editorOptions` | `PierreDiffEditorOptions` | Editor behavior, key bindings, and selection actions |
+| `markers` | `[PierreDiffMarker]` | Zero-based severity markers for the editable document |
+| `editorController` | `PierreDiffEditorController?` | Reactive editor state and imperative commands |
 | `annotations` | `[DiffAnnotation]?` | Inline annotations rendered below diff lines |
 | `onLineClick` | `((Int, String) -> Void)?` | Simple line click (lineNumber, side) |
 | `onLineClickWithPosition` | `((LineClickPosition, CGPoint) -> Void)?` | Line click with position for overlay placement |
 | `onLineSelectionChange` | `((LineSelectionRange) -> Void)?` | Multi-line drag selection range |
 | `onAnnotationClick` | `((String, String, Int, CGPoint) -> Void)?` | Annotation clicked (id, side, lineNumber, localPoint) |
 | `onAnnotationDelete` | `((String, String, Int) -> Void)?` | Annotation delete requested (id, side, lineNumber) |
+| `onEditChange` | `((PierreDiffEditChange) -> Void)?` | Complete edited content, normalized edits, and shifted annotations |
+| `onEditFocus` / `onEditBlur` | `(() -> Void)?` | Editor focus lifecycle |
+| `onSelectionAction` | `((PierreDiffSelectionActionEvent) -> Void)?` | Configured selection action and selected snippet |
+| `onEditError` | `((String) -> Void)?` | Editor loading or command error |
 | `onExpandRequest` | `(() -> Void)?` | View requests full-screen expansion |
 | `onReady` | `(() -> Void)?` | WebView finished loading and rendered the diff |
 
@@ -556,11 +639,11 @@ The package includes a pre-built JavaScript bundle. To rebuild it:
 
 ```bash
 cd scripts
-npm install
+npm ci
 npm run build
 ```
 
-This generates `pierre-diffs-bundle.js` which should be copied to `Sources/PierreDiffsSwift/Resources/`.
+This regenerates both checked-in resources in `Sources/PierreDiffsSwift/Resources/`: `pierre-diffs-bundle.js` for read-only rendering and `pierre-diffs-edit-bundle.js` for lazy-loaded editing. The script manifest pins Shiki 4.4.1 alongside `@pierre/diffs` 1.3.5 because Pierre's editor build references theme exports that are unavailable in the older Shiki 3.x tree.
 
 Before exposing additional upstream APIs, read [docs/upstream-pierre-diffs.md](docs/upstream-pierre-diffs.md), verify the pinned version in [scripts/package.json](scripts/package.json), and update [CHANGELOG.md](CHANGELOG.md).
 

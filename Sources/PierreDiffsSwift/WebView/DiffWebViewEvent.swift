@@ -30,6 +30,30 @@ enum DiffWebViewEvent {
   /// An annotation delete was requested
   case annotationDeleteRequested(id: String, side: String, lineNumber: Int)
 
+  /// The editable new-file document changed.
+  case editorChanged(PierreDiffEditChange)
+
+  /// Editor attachment, history, or content state changed.
+  case editorStateChanged(
+    content: String,
+    isAttached: Bool,
+    isFocused: Bool?,
+    canUndo: Bool,
+    canRedo: Bool
+  )
+
+  /// The editor gained focus.
+  case editorFocused
+
+  /// The editor lost focus.
+  case editorBlurred
+
+  /// A configured selection action was chosen.
+  case editorSelectionAction(PierreDiffSelectionActionEvent)
+
+  /// The experimental editor reported an error.
+  case editorError(message: String)
+
   /// An error occurred in the JavaScript layer
   case error(message: String)
 }

@@ -18,7 +18,7 @@ let package = Package(
     .target(
       name: "PierreDiffsSwift",
       resources: [
-        .copy("Resources/pierre-diffs-bundle.js")
+        .copy("Resources")
       ]
     ),
     .testTarget(

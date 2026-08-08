@@ -95,3 +95,102 @@ import Testing
   #expect(setAnnotationsBlock.contains(".render(") || setAnnotationsBlock.contains(".render({"))
   #expect(!setAnnotationsBlock.contains(".rerender()"))
 }
+
+@Test func editorOptionsEncodeForLazyBridge() throws {
+  let options = PierreDiffEditorOptions(
+    historyMaxEntries: 42,
+    roundedSelection: false,
+    matchBrackets: false,
+    autoSurround: .quotes,
+    keymap: ["cmd+Enter": .insertBlankLine],
+    selectionActions: [
+      PierreDiffSelectionAction(id: "add-to-chat", title: "Add to chat")
+    ]
+  )
+
+  let data = try JSONEncoder().encode(options)
+  let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+  let keymap = try #require(object["keymap"] as? [String: String])
+  let actions = try #require(object["selectionActions"] as? [[String: Any]])
+
+  #expect(object["historyMaxEntries"] as? Int == 42)
+  #expect(object["roundedSelection"] as? Bool == false)
+  #expect(object["matchBrackets"] as? Bool == false)
+  #expect(object["autoSurround"] as? String == "quotes")
+  #expect(keymap["cmd+Enter"] == "insertBlankLine")
+  #expect(actions.first?["id"] as? String == "add-to-chat")
+}
+
+@Test func editChangeDecodesShiftedAnnotationsAndNormalizedEdits() throws {
+  let json = """
+  {
+    "fileName": "Example.swift",
+    "content": "let value = 2\\n",
+    "annotations": [{
+      "side": "additions",
+      "lineNumber": 2,
+      "metadata": {"id": "review-1", "author": "You", "body": "Check this"}
+    }],
+    "changes": [{
+      "start": 12,
+      "end": 13,
+      "text": "2",
+      "range": {
+        "start": {"line": 0, "character": 12},
+        "end": {"line": 0, "character": 13}
+      }
+    }],
+    "canUndo": true,
+    "canRedo": false
+  }
+  """
+
+  let change = try JSONDecoder().decode(
+    PierreDiffEditChange.self,
+    from: Data(json.utf8)
+  )
+
+  #expect(change.content == "let value = 2\n")
+  #expect(change.annotations?.first?.lineNumber == 2)
+  #expect(change.changes.first?.range.start.character == 12)
+  #expect(change.canUndo)
+  #expect(!change.canRedo)
+}
+
+@Test @MainActor func editorControllerTracksPublishedState() {
+  let controller = PierreDiffEditorController()
+
+  controller.update(
+    content: "updated",
+    isAttached: true,
+    isFocused: true,
+    canUndo: true,
+    canRedo: false
+  )
+
+  #expect(controller.content == "updated")
+  #expect(controller.isAttached)
+  #expect(controller.isFocused)
+  #expect(controller.canUndo)
+  #expect(!controller.canRedo)
+}
+
+@Test func editorBundleHasASeparateLazyEntryPoint() throws {
+  let repository = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+  let mainEntry = try String(
+    contentsOf: repository.appending(path: "scripts/src/diff-entry.js"),
+    encoding: .utf8
+  )
+  let editEntry = try String(
+    contentsOf: repository.appending(path: "scripts/src/edit-entry.js"),
+    encoding: .utf8
+  )
+
+  #expect(!mainEntry.contains("from '@pierre/diffs/edit'"))
+  #expect(editEntry.contains("from '@pierre/diffs/edit'"))
+  #expect(mainEntry.contains("setEditing(configuration"))
+  #expect(mainEntry.contains("editorCommand(command"))
+}

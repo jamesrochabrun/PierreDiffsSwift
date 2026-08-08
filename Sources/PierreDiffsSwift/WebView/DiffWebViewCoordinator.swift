@@ -38,11 +38,38 @@ public final class DiffWebViewCoordinator: NSObject {
   /// Callback when an annotation delete is requested (id, side, lineNumber)
   var onAnnotationDelete: ((String, String, Int) -> Void)?
 
+  /// Callback when the editable new-file document changes.
+  var onEditChange: ((PierreDiffEditChange) -> Void)?
+
+  /// Callback when the editor gains focus.
+  var onEditFocus: (() -> Void)?
+
+  /// Callback when the editor loses focus.
+  var onEditBlur: (() -> Void)?
+
+  /// Callback for a configured selection action.
+  var onSelectionAction: ((PierreDiffSelectionActionEvent) -> Void)?
+
+  /// Callback for errors reported by the experimental editor.
+  var onEditError: ((String) -> Void)?
+
+  /// Optional reactive handle for imperative editor commands.
+  weak var editorController: PierreDiffEditorController?
+
   /// Whether the web view has finished loading and is ready
   private(set) var isReady = false
 
   /// Queue of operations to execute once ready
   private var pendingOperations: [() -> Void] = []
+
+  /// Whether the optional edit bundle has been evaluated in this WebView.
+  private var isEditorBundleLoaded = false
+
+  /// Whether the optional edit bundle is currently being evaluated.
+  private var isEditorBundleLoading = false
+
+  /// Operations waiting for the optional edit bundle.
+  private var pendingEditorOperations: [() -> Void] = []
 
   // MARK: - State Tracking (for updateNSView optimization)
 
@@ -54,6 +81,11 @@ public final class DiffWebViewCoordinator: NSObject {
   var lastTheme: String?
   var lastRenderOptions: PierreDiffRenderOptions?
   var lastAnnotations: [DiffAnnotation]?
+  var lastIsEditing: Bool?
+  var lastEditorOptions: PierreDiffEditorOptions?
+  var lastMarkers: [PierreDiffMarker]?
+  var lastEditedContent: String?
+  var lastEditedAnnotations: [DiffAnnotation]?
 
   // MARK: - Initialization
 
@@ -64,7 +96,13 @@ public final class DiffWebViewCoordinator: NSObject {
     onExpandRequest: (() -> Void)? = nil,
     onReady: (() -> Void)? = nil,
     onAnnotationClick: ((String, String, Int, CGPoint) -> Void)? = nil,
-    onAnnotationDelete: ((String, String, Int) -> Void)? = nil
+    onAnnotationDelete: ((String, String, Int) -> Void)? = nil,
+    onEditChange: ((PierreDiffEditChange) -> Void)? = nil,
+    onEditFocus: (() -> Void)? = nil,
+    onEditBlur: (() -> Void)? = nil,
+    onSelectionAction: ((PierreDiffSelectionActionEvent) -> Void)? = nil,
+    onEditError: ((String) -> Void)? = nil,
+    editorController: PierreDiffEditorController? = nil
   ) {
     self.onLineClick = onLineClick
     self.onLineClickWithPosition = onLineClickWithPosition
@@ -73,7 +111,14 @@ public final class DiffWebViewCoordinator: NSObject {
     self.onReady = onReady
     self.onAnnotationClick = onAnnotationClick
     self.onAnnotationDelete = onAnnotationDelete
+    self.onEditChange = onEditChange
+    self.onEditFocus = onEditFocus
+    self.onEditBlur = onEditBlur
+    self.onSelectionAction = onSelectionAction
+    self.onEditError = onEditError
+    self.editorController = editorController
     super.init()
+    connectEditorController()
   }
 
   // MARK: - Coordinate Conversion
@@ -168,6 +213,56 @@ public final class DiffWebViewCoordinator: NSObject {
     }
   }
 
+  /// Enables or disables edit mode, loading the editor bundle on first use.
+  func setEditing(
+    _ isEditing: Bool,
+    options: PierreDiffEditorOptions,
+    markers: [PierreDiffMarker]
+  ) {
+    let configuration = PierreDiffEditingConfiguration(
+      enabled: isEditing,
+      options: options,
+      markers: markers
+    )
+
+    guard isEditing else {
+      executeWhenReady { [weak self] in
+        self?.callJavaScript("setEditing", with: configuration)
+      }
+      return
+    }
+
+    guard #available(macOS 14.5, *) else {
+      reportEditorError("Edit mode requires macOS 14.5 or later.")
+      return
+    }
+
+    executeWhenEditorReady { [weak self] in
+      self?.callJavaScript("setEditing", with: configuration)
+    }
+  }
+
+  /// Updates editor options without re-rendering the diff.
+  func setEditorOptions(_ options: PierreDiffEditorOptions) {
+    executeWhenReady { [weak self] in
+      self?.callJavaScript("setEditorOptions", with: options)
+    }
+  }
+
+  /// Replaces all markers without re-rendering the diff.
+  func setMarkers(_ markers: [PierreDiffMarker]) {
+    executeWhenReady { [weak self] in
+      self?.callJavaScript("setMarkers", with: markers)
+    }
+  }
+
+  func setEditorController(_ controller: PierreDiffEditorController?) {
+    guard editorController !== controller else { return }
+    editorController?.disconnect()
+    editorController = controller
+    connectEditorController()
+  }
+
   /// Scrolls to a specific line
   func scrollToLine(_ line: Int) {
     executeWhenReady { [weak self] in
@@ -189,6 +284,14 @@ public final class DiffWebViewCoordinator: NSObject {
     onReady = nil
     onAnnotationClick = nil
     onAnnotationDelete = nil
+    onEditChange = nil
+    onEditFocus = nil
+    onEditBlur = nil
+    onSelectionAction = nil
+    onEditError = nil
+    editorController?.disconnect()
+    editorController = nil
+    pendingEditorOperations.removeAll()
   }
 
   // MARK: - Private Methods
@@ -205,6 +308,91 @@ public final class DiffWebViewCoordinator: NSObject {
     let operations = pendingOperations
     pendingOperations.removeAll()
     operations.forEach { $0() }
+  }
+
+  private func executeWhenEditorReady(_ operation: @escaping () -> Void) {
+    executeWhenReady { [weak self] in
+      guard let self else { return }
+      if isEditorBundleLoaded {
+        operation()
+        return
+      }
+
+      pendingEditorOperations.append(operation)
+      loadEditorBundleIfNeeded()
+    }
+  }
+
+  private func loadEditorBundleIfNeeded() {
+    guard !isEditorBundleLoaded, !isEditorBundleLoading else { return }
+    guard let editorJavaScript = DiffHTMLTemplate.loadBundledEditorJavaScript() else {
+      reportEditorError("The bundled @pierre/diffs editor could not be loaded.")
+      pendingEditorOperations.removeAll()
+      return
+    }
+    guard let webView else {
+      reportEditorError("The diff WebView is unavailable.")
+      pendingEditorOperations.removeAll()
+      return
+    }
+
+    isEditorBundleLoading = true
+    webView.evaluateJavaScript(editorJavaScript) { [weak self] _, error in
+      guard let self else { return }
+      isEditorBundleLoading = false
+      if let error {
+        reportEditorError("Failed to load the @pierre/diffs editor: \(error.localizedDescription)")
+        pendingEditorOperations.removeAll()
+        return
+      }
+
+      isEditorBundleLoaded = true
+      let operations = pendingEditorOperations
+      pendingEditorOperations.removeAll()
+      operations.forEach { $0() }
+    }
+  }
+
+  private func connectEditorController() {
+    editorController?.connect { [weak self] action in
+      self?.performEditorControllerAction(action)
+    }
+  }
+
+  private func performEditorControllerAction(_ action: PierreDiffEditorControllerAction) {
+    let input: PierreDiffEditorCommandInput
+    switch action {
+    case .undo:
+      input = PierreDiffEditorCommandInput(type: "undo")
+    case .redo:
+      input = PierreDiffEditorCommandInput(type: "redo")
+    case .focus(let lineNumber, let character):
+      input = PierreDiffEditorCommandInput(
+        type: "focus",
+        lineNumber: lineNumber,
+        character: character
+      )
+    case .blur:
+      input = PierreDiffEditorCommandInput(type: "blur")
+    case .applyEdits(let edits):
+      input = PierreDiffEditorCommandInput(type: "applyEdits", edits: edits)
+    case .setSelections(let selections):
+      input = PierreDiffEditorCommandInput(
+        type: "setSelections",
+        selections: selections
+      )
+    case .setMarkers(let markers):
+      input = PierreDiffEditorCommandInput(type: "setMarkers", markers: markers)
+    }
+
+    executeWhenReady { [weak self] in
+      self?.callJavaScript("editorCommand", with: input)
+    }
+  }
+
+  private func reportEditorError(_ message: String) {
+    DiffLogger.error("DiffWebViewCoordinator: \(message)")
+    onEditError?(message)
   }
 
   private func callJavaScript<T: Encodable>(_ method: String, with input: T) {
@@ -312,11 +500,58 @@ public final class DiffWebViewCoordinator: NSObject {
       DiffLogger.info("Annotation delete requested: id=\(id), side=\(side), line=\(lineNumber)")
       onAnnotationDelete?(id, side, lineNumber)
 
+    case .editorChanged(let change):
+      lastEditedContent = change.content
+      lastEditedAnnotations = change.annotations
+      editorController?.update(
+        content: change.content,
+        isAttached: true,
+        canUndo: change.canUndo,
+        canRedo: change.canRedo
+      )
+      onEditChange?(change)
+
+    case .editorStateChanged(let content, let isAttached, let isFocused, let canUndo, let canRedo):
+      editorController?.update(
+        content: content,
+        isAttached: isAttached,
+        isFocused: isFocused,
+        canUndo: canUndo,
+        canRedo: canRedo
+      )
+
+    case .editorFocused:
+      editorController?.update(isFocused: true)
+      onEditFocus?()
+
+    case .editorBlurred:
+      editorController?.update(isFocused: false)
+      onEditBlur?()
+
+    case .editorSelectionAction(let event):
+      onSelectionAction?(event)
+
+    case .editorError(let errorMessage):
+      reportEditorError(errorMessage)
+
     case .systemThemeChanged(let isDark):
       DiffLogger.info("System theme changed: isDark=\(isDark)")
 
     case .error(let errorMessage):
       DiffLogger.error("DiffWebViewCoordinator: JS error: \(errorMessage)")
+    }
+  }
+
+  private func decodeMessage<T: Decodable>(
+    _ type: T.Type,
+    from body: [String: Any]
+  ) -> T? {
+    do {
+      let data = try JSONSerialization.data(withJSONObject: body)
+      return try JSONDecoder().decode(type, from: data)
+    } catch {
+      DiffLogger.error("DiffWebViewCoordinator: Failed to decode \(type): \(error)")
+      return nil
     }
   }
 }
@@ -391,6 +626,44 @@ extension DiffWebViewCoordinator: WKScriptMessageHandler {
       let side = body["side"] as? String ?? ""
       let lineNumber = body["lineNumber"] as? Int ?? 0
       event = .annotationDeleteRequested(id: id, side: side, lineNumber: lineNumber)
+
+    case "editorChanged":
+      guard let change = decodeMessage(PierreDiffEditChange.self, from: body) else {
+        return
+      }
+      event = .editorChanged(change)
+
+    case "editorStateChanged":
+      let content = body["content"] as? String ?? ""
+      let isAttached = body["isAttached"] as? Bool ?? false
+      let isFocused = body["isFocused"] as? Bool
+      let canUndo = body["canUndo"] as? Bool ?? false
+      let canRedo = body["canRedo"] as? Bool ?? false
+      event = .editorStateChanged(
+        content: content,
+        isAttached: isAttached,
+        isFocused: isFocused,
+        canUndo: canUndo,
+        canRedo: canRedo
+      )
+
+    case "editorFocused":
+      event = .editorFocused
+
+    case "editorBlurred":
+      event = .editorBlurred
+
+    case "editorSelectionAction":
+      guard let selectionAction = decodeMessage(
+        PierreDiffSelectionActionEvent.self,
+        from: body
+      ) else {
+        return
+      }
+      event = .editorSelectionAction(selectionAction)
+
+    case "editorError":
+      event = .editorError(message: body["message"] as? String ?? "Unknown editor error")
 
     case "systemThemeChanged":
       let isDark = body["isDark"] as? Bool ?? false
