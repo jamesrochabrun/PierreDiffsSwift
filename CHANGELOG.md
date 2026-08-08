@@ -2,6 +2,12 @@
 
 All notable changes to PierreDiffsSwift are documented here.
 
+## Unreleased
+
+### Fixed
+
+- Shared the main bundle's Shiki TextMate runtime with the lazy editor bundle so syntax-highlighted edits update the rendered document instead of failing after the model changes.
+
 ## 1.3.0 - 2026-08-08
 
 ### Added

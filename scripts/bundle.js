@@ -37,6 +37,30 @@ const sharedBuildOptions = {
   },
 };
 
+const sharedTextmateRuntimePlugin = {
+  name: 'shared-textmate-runtime',
+  setup(build) {
+    build.onResolve({ filter: /^shiki\/textmate$/ }, () => ({
+      path: 'shared-textmate-runtime',
+      namespace: 'pierre-shared',
+    }));
+    build.onLoad(
+      { filter: /^shared-textmate-runtime$/, namespace: 'pierre-shared' },
+      () => ({
+        contents: `
+          const textmate = window.PierreDiffsShared?.textmate;
+          if (!textmate) {
+            throw new Error('The shared Shiki TextMate runtime is unavailable.');
+          }
+          export const EncodedTokenMetadata = textmate.EncodedTokenMetadata;
+          export const INITIAL = textmate.INITIAL;
+        `,
+        loader: 'js',
+      })
+    );
+  },
+};
+
 const mainBuildOptions = {
   ...sharedBuildOptions,
   entryPoints: ['src/diff-entry.js'],
@@ -51,6 +75,7 @@ const editBuildOptions = {
   outfile: editOutfile,
   target: ['safari17.5'],
   globalName: 'PierreDiffsEditBundle',
+  plugins: [sharedTextmateRuntimePlugin],
 };
 
 if (isWatch) {

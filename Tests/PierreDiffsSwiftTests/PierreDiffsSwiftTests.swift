@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Testing
+import WebKit
 @testable import PierreDiffsSwift
 
 @Test func defaultRenderOptionsPreserveBridgeDefaults() {
@@ -188,9 +190,153 @@ import Testing
     contentsOf: repository.appending(path: "scripts/src/edit-entry.js"),
     encoding: .utf8
   )
+  let bundleScript = try String(
+    contentsOf: repository.appending(path: "scripts/bundle.js"),
+    encoding: .utf8
+  )
 
   #expect(!mainEntry.contains("from '@pierre/diffs/edit'"))
   #expect(editEntry.contains("from '@pierre/diffs/edit'"))
+  #expect(mainEntry.contains("from 'shiki/textmate'"))
+  #expect(mainEntry.contains("window.PierreDiffsShared"))
+  #expect(bundleScript.contains("shared-textmate-runtime"))
+  #expect(bundleScript.contains("plugins: [sharedTextmateRuntimePlugin]"))
   #expect(mainEntry.contains("setEditing(configuration"))
   #expect(mainEntry.contains("editorCommand(command"))
+}
+
+@Test @MainActor func highlightedEditorRendersTypedInput() async throws {
+  let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+  let window = NSWindow(
+    contentRect: webView.frame,
+    styleMask: [.titled],
+    backing: .buffered,
+    defer: false
+  )
+  window.contentView = webView
+  window.makeKeyAndOrderFront(nil)
+  defer {
+    webView.stopLoading()
+    window.orderOut(nil)
+  }
+
+  webView.loadHTMLString(DiffHTMLTemplate.generateHTML(), baseURL: nil)
+  try await waitForJavaScript("typeof window.pierreBridge === 'object'", in: webView)
+
+  _ = try await webView.evaluateJavaScript(
+    """
+    window.pierreBridge.renderDiff({
+      oldFile: { name: 'Example.swift', contents: '' },
+      newFile: { name: 'Example.swift', contents: 'let value = 1\\n' },
+      options: {
+        diffStyle: 'unified',
+        overflow: 'scroll',
+        expandUnchanged: true,
+      },
+    });
+    true;
+    """
+  )
+  try await waitForJavaScript(PierreDiffWebViewTestSupport.hasRenderedCodeScript, in: webView)
+
+  let editorJavaScript = try #require(DiffHTMLTemplate.loadBundledEditorJavaScript())
+  _ = try await webView.evaluateJavaScript(editorJavaScript)
+  _ = try await webView.evaluateJavaScript(
+    """
+    window.__pierreTestErrors = [];
+    window.addEventListener('error', (event) => {
+      window.__pierreTestErrors.push(String(event.message || event.error || 'unknown'));
+    });
+    window.pierreBridge.setEditing({ enabled: true, options: {}, markers: [] });
+    true;
+    """
+  )
+  try await waitForJavaScript(PierreDiffWebViewTestSupport.hasEditableCodeScript, in: webView)
+
+  _ = try await webView.evaluateJavaScript(
+    """
+    window.pierreBridge.editorCommand({ type: 'focus', lineNumber: 1, character: 0 });
+    true;
+    """
+  )
+  try await Task.sleep(for: .milliseconds(100))
+  let keyEvent = try #require(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "x",
+      charactersIgnoringModifiers: "x",
+      isARepeat: false,
+      keyCode: 7
+    )
+  )
+  NSApplication.shared.sendEvent(keyEvent)
+
+  try await waitForJavaScript(
+    "(() => (\(PierreDiffWebViewTestSupport.findEditableJavaScript))()?.innerText.startsWith('xlet') === true)()",
+    in: webView
+  )
+  let errors = try await webView.evaluateJavaScript("window.__pierreTestErrors") as? [String]
+  #expect(errors == [])
+}
+
+@MainActor
+private func waitForJavaScript(
+  _ condition: String,
+  in webView: WKWebView,
+  timeout: Duration = .seconds(5)
+) async throws {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+
+  while clock.now < deadline {
+    if let isReady = try? await webView.evaluateJavaScript("Boolean(\(condition))") as? Bool,
+       isReady {
+      return
+    }
+    try await Task.sleep(for: .milliseconds(50))
+  }
+
+  throw PierreDiffWebViewTestSupport.timedOut(condition)
+}
+
+private enum PierreDiffWebViewTestSupport: Error {
+  case timedOut(String)
+
+  static let findEditableJavaScript = """
+    () => {
+      const visit = (root) => {
+        for (const node of root.querySelectorAll('*')) {
+          if (node.getAttribute?.('contenteditable') === 'true') return node;
+          if (node.shadowRoot) {
+            const match = visit(node.shadowRoot);
+            if (match) return match;
+          }
+        }
+        return null;
+      };
+      return visit(document);
+    }
+    """
+
+  static let hasRenderedCodeScript = """
+    (() => {
+      const editor = (\(findEditableJavaScript))();
+      if (editor) return editor.innerText.includes('let value = 1');
+      const visit = (root) => {
+        for (const node of root.querySelectorAll('*')) {
+          if (node.shadowRoot && visit(node.shadowRoot)) return true;
+          if (node.innerText?.includes('let value = 1')) return true;
+        }
+        return false;
+      };
+      return visit(document);
+    })()
+    """
+
+  static let hasEditableCodeScript = "(\(findEditableJavaScript))() !== null"
 }
