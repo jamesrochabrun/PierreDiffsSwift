@@ -54,6 +54,8 @@ PierreDiffView (SwiftUI NSViewRepresentable)
 
 `updateNSView` tracks previous values via coordinator properties (`lastOldContent`, `lastDiffStyle`, `lastRenderOptions`, `lastAnnotations`, editor configuration, markers, etc.) and only calls the relevant JS method when a specific property changes. Content and render option changes trigger full re-render; style/theme/overflow/annotation/editor changes use targeted update methods. Editor-originated controlled echoes are absorbed without replacing the DOM or undo history.
 
+Consumers must keep `PierreDiffView`'s SwiftUI identity stable while editing and saving. Do not key `.id(...)` from edited content or rotate a document identity for a save echo; dismantling the view recreates the WebView and necessarily resets scroll, caret, and undo state. Identity changes are appropriate only when switching documents.
+
 ## Upstream Docs
 
 Before exposing more `@pierre/diffs` APIs, read `docs/upstream-pierre-diffs.md`, then verify the pinned package's local declarations under `scripts/node_modules/@pierre/diffs/dist/`. Cross-check upstream docs and releases, but keep wrapper behavior aligned to the pinned version in `scripts/package.json`.
