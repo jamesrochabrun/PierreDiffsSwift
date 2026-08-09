@@ -146,6 +146,8 @@ struct EditableDiffView: View {
 
 Edit mode is experimental upstream. In a diff, only the new-file side is editable. Annotation positions on that side follow line inserts, deletes, merges, undo, and redo; use the annotations delivered by `onEditChange` as the next controlled value.
 
+Keep `PierreDiffView`'s SwiftUI identity stable while editing and saving. Publish `change.content` back as `newContent`, but do not derive `.id(...)` from the content or generate a new identity after each save. Recreating the view also recreates its WebView, which resets scroll position, caret state, and undo history. Change the identity only when switching to a genuinely different document.
+
 ## API Reference
 
 ### Views

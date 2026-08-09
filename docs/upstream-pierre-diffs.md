@@ -42,6 +42,8 @@ Do not assume upstream `latest` docs match the pinned bundled version. If the np
 
 The edit entry point is built as `pierre-diffs-edit-bundle.js` and evaluated only after edit mode is first enabled. Keep it separate from `pierre-diffs-bundle.js` so read-only consumers do not load editor code.
 
+The two bundles must share the same `shiki/textmate` runtime. Shiki grammars and editor rule stacks are runtime-specific; bundling a second copy into the lazy editor causes highlighted document changes to fail during tokenization even though the editor model changes. The main entry exposes the shared runtime and the edit build's esbuild plugin substitutes that runtime for its `shiki/textmate` import.
+
 Keep the Shiki 4.4.1 compatibility pins synchronized. Without explicit pins, npm can retain a compatible-by-range Shiki 3.x lock tree that does not export `ayu-light`, `ayu-mirage`, `horizon`, `horizon-bright`, or `night-owl-light`, all referenced by `@pierre/theming` 1.0.1 during bundling.
 
 The consumer owns edited content and annotations. The bridge updates its live new-file reference before publishing `PierreDiffEditChange`, which prevents declarative marker/annotation updates from restoring stale content. SwiftUI echoes matching editor content and annotations are accepted without a full render so undo history remains intact.

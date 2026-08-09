@@ -6,6 +6,16 @@
  */
 
 import { FileDiff, parseDiffFromFile } from '@pierre/diffs';
+import { EncodedTokenMetadata, INITIAL } from 'shiki/textmate';
+
+// The editor bundle is loaded separately, but its tokenizer must use the exact
+// TextMate runtime that created the main bundle's Shiki grammars. Duplicating
+// this module across the two bundles produces incompatible grammar state in
+// WebKit and crashes highlighted edits while the underlying document changes.
+window.PierreDiffsShared = {
+  ...(window.PierreDiffsShared || {}),
+  textmate: { EncodedTokenMetadata, INITIAL },
+};
 
 // Global state
 let currentDiffInstance = null;

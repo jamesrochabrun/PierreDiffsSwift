@@ -126,6 +126,8 @@ PierreDiffView(
 
 SwiftUI echoes matching content and annotations are absorbed by the coordinator without replacing the editor DOM, preserving carets and undo history. A genuinely different `newContent` value remains an external controlled update and triggers a full render.
 
+Keep the `PierreDiffView` identity stable for the lifetime of the edited document. Never key `.id(...)` from `newContent` or replace a document UUID after saving an editor-originated value. SwiftUI dismantles the WebView when identity changes, so the coordinator cannot absorb the controlled echo and scroll, caret, and undo state are lost. Rotate identity only when the consumer intentionally switches documents.
+
 ### Markers
 
 Markers use zero-based document positions, matching upstream editor ranges:
